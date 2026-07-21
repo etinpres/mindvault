@@ -1071,10 +1071,10 @@ git commit -m "feat(reliability): SessionEnd 증분 reverify 트리거 (best-eff
 python3 src/reverify_cli.py verify-registry
 
 # 2) 메모리 전체 stale 재검증 + flag
-python3 src/reverify_cli.py scan ~/.claude/projects/-Users-yonghaekim/memory --json
+python3 src/reverify_cli.py scan ~/.claude/projects/<home-slug>/memory --json
 
 # 3) 현재 stale flag 된 메모리 확인
-python3 src/reverify_cli.py list ~/.claude/projects/-Users-yonghaekim/memory
+python3 src/reverify_cli.py list ~/.claude/projects/<home-slug>/memory
 ```
 
 SessionEnd 증분(주 1회)이 활성화되면 (2)는 자동. 형은 (3)으로 stale 메모리를 보고 본문 수정 → 다음 scan 이 flag 제거(cleanup).

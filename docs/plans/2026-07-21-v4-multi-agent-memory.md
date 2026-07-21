@@ -6,7 +6,7 @@
 
 **Goal:** Claude Code와 Codex가 MindVault를 대등한 1급 시민으로 사용하게 한다 — 회수 주입(완료)에 이어 ① 에이전트 소스 태깅, ② Codex 세션 자동 추출, ③ Codex close-session 규약까지 채워 v4.0.0으로 릴리스한다.
 
-**Architecture:** 저장소(`~/.claude/projects/-Users-yonghaekim/memory/` = `~/my-folder/knowledge-hub/memory` 심링크)와 recall 엔진(`memory-recall.py`)은 이미 양쪽 공유이며 commit fe8c294(v3.10.0 태그 예정)에서 Codex `UserPromptSubmit` 주입이 연결됐다. v4는 코어를 바꾸지 않고 **경계 어댑터**만 추가한다: env 기반 에이전트 태깅(hot path 비용 0), Codex rollout JSONL → 기존 정규화 메시지 계약으로 변환하는 로더(추출은 hook 밖 비동기 경로), Codex 쪽 저장 규약 정비.
+**Architecture:** 저장소(`~/.claude/projects/<home-slug>/memory/` = `~/my-folder/knowledge-hub/memory` 심링크)와 recall 엔진(`memory-recall.py`)은 이미 양쪽 공유이며 commit fe8c294(v3.10.0 태그 예정)에서 Codex `UserPromptSubmit` 주입이 연결됐다. v4는 코어를 바꾸지 않고 **경계 어댑터**만 추가한다: env 기반 에이전트 태깅(hot path 비용 0), Codex rollout JSONL → 기존 정규화 메시지 계약으로 변환하는 로더(추출은 hook 밖 비동기 경로), Codex 쪽 저장 규약 정비.
 
 **Tech Stack:** Python 3.10 (`/Library/Frameworks/Python.framework/Versions/3.10`), pytest, Codex CLI 0.144+ hooks(`~/.codex/hooks.json`), Gemma 4 12B(localhost:8080, `enable_thinking: false`), Arctic-ko 임베딩 서버.
 
@@ -25,8 +25,8 @@
 ## 배경 사실 (Codex 세션용 — 이 대화 맥락 없이 알아야 할 것)
 
 - repo: `~/my-folder/apps/mindvault-v3` (GitHub `etinpres/mindvault-v3`), 배포본: `~/.claude/scripts/mindvault/` (post-commit hook이 자동 sync).
-- recall hook: `/Users/yonghaekim/.claude/hooks/memory-recall.py` — stdin JSON `{"prompt": ...}` 를 읽어 hybrid 검색(FTS5+Arctic-ko vec, RRF) 후 `<system-reminder>` 블록을 stdout으로 출력. Claude·Codex 모두 이 stdout을 컨텍스트로 주입.
-- Codex 연동 현황 (commit fe8c294 — **v3.10.0 태그는 회귀 green 후 push 시 부여 예정**, 현재 최신 태그는 v3.9.1): `~/.codex/hooks.json` `UserPromptSubmit`에 위 hook이 command `"/Users/yonghaekim/.claude/hooks/memory-recall.py # mindvault-v3-codex-recall"`로 등록됨. e2e 검증 2건 통과.
+- recall hook: `~/.claude/hooks/memory-recall.py` — stdin JSON `{"prompt": ...}` 를 읽어 hybrid 검색(FTS5+Arctic-ko vec, RRF) 후 `<system-reminder>` 블록을 stdout으로 출력. Claude·Codex 모두 이 stdout을 컨텍스트로 주입.
+- Codex 연동 현황 (commit fe8c294 — **v3.10.0 태그는 회귀 green 후 push 시 부여 예정**, 현재 최신 태그는 v3.9.1): `~/.codex/hooks.json` `UserPromptSubmit`에 위 hook이 command `"~/.claude/hooks/memory-recall.py # mindvault-v3-codex-recall"`로 등록됨. e2e 검증 2건 통과.
 - Claude 세션 종료 추출 트리거: install.sh가 SessionEnd hook + 비동기 wrapper(백그라운드 detach — 종료 시 SIGTERM 회피, install.sh:234 주변)를 배포·등록하고, `src/session_memory_end.py`가 세션 transcript에서 추출을 수행한다. v4의 Codex 트리거(P3·S4)는 이 구조의 대칭 이식이다.
 - 계측 파일: `~/.claude/mindvault-v3/metrics.jsonl` (kind: `recall`/`recall_skip`), `~/.claude/mindvault-v3/debug.log`.
 - Claude 세션 추출 계약: `src/memory_extractor.py:173` `load_tail_messages(jsonl_path, tail_turns=40) -> list[dict]` 가 세션 JSONL을 **정규화 메시지** `{"role": "user"|"assistant", "text": <redact() 적용 str>, "bash_commands": list[str]}` 목록(마지막 40턴)으로 만들고, `extract_from_jsonl()` → Gemma 추출 → `memory_review` 승인 파이프라인으로 흐른다.
@@ -43,7 +43,7 @@
 - Modify: `tests/test_codex_recall_hook.py` (command 검증 갱신)
 
 **Interfaces:**
-- Produces: `~/.codex/hooks.json`의 UserPromptSubmit command가 `MV3_AGENT=codex /Users/yonghaekim/.claude/hooks/memory-recall.py # mindvault-v3-codex-recall` 이 된다. Task P1은 이 env 값을 읽는다. 값 계약: `"codex"` (소문자 고정).
+- Produces: `~/.codex/hooks.json`의 UserPromptSubmit command가 `MV3_AGENT=codex ~/.claude/hooks/memory-recall.py # mindvault-v3-codex-recall` 이 된다. Task P1은 이 env 값을 읽는다. 값 계약: `"codex"` (소문자 고정).
 
 - [ ] **Step 1: 실패하는 테스트 수정** — `tests/test_codex_recall_hook.py`(unittest 스타일, `TestCodexRecallHookManager` 클래스)에서 command 문자열을 검증하는 기존 케이스의 기대값을 `MV3_AGENT=codex ` prefix 포함으로 바꾸고, 신규 케이스 1개 추가:
 
@@ -114,7 +114,7 @@ if agent not in ("claude", "codex"):
 
 모든 `_metric({...})` 호출 dict에 `"agent": agent` 추가, `_debug(f"hook-recall: ...")` 라인에 `agent={agent}` 추가. **다른 로직 변경 없음** (400ms 예산·게이트 불변).
 
-- [ ] **Step 3b: Claude 쪽 등록에 env 명시** — `install.sh`의 UserPromptSubmit hook 등록부에서 command를 `MV3_AGENT=claude /Users/yonghaekim/.claude/hooks/memory-recall.py`로 변경 (S1의 codex 쪽과 대칭). install.sh의 기존 stale-entry 제거 로직이 구형 command를 교체하는지 확인하고, 안 되면 교체 분기 추가.
+- [ ] **Step 3b: Claude 쪽 등록에 env 명시** — `install.sh`의 UserPromptSubmit hook 등록부에서 command를 `MV3_AGENT=claude ~/.claude/hooks/memory-recall.py`로 변경 (S1의 codex 쪽과 대칭). install.sh의 기존 stale-entry 제거 로직이 구형 command를 교체하는지 확인하고, 안 되면 교체 분기 추가.
 
 - [ ] **Step 4: 통과 확인** — Run: 해당 테스트 파일 + `python3 -m pytest -q` 전체 green.
 - [ ] **Step 5: 배포 + 실측** — Run: `MV3_SYNC_ONLY=1 ./install.sh` 후, Claude 세션 프롬프트 1회와 Codex 프롬프트 1회를 발생시켜 `tail -2 ~/.claude/mindvault-v3/metrics.jsonl`에서 `"agent": "claude"`와 `"agent": "codex"`가 각각 찍히는 것 확인.

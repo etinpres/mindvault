@@ -19,7 +19,7 @@
 ## 1. 문제 (실측 근거)
 
 - **over-trust 사고 (2026-05-30, 본 로드맵 작성 대화에서 재현)**: 어시스턴트가 회수된 메모리의 stale 한 "BGE-M3" 임베딩 표기를 믿고 시스템 상태를 틀리게 답함. 실제 현행은 Arctic-ko v2.0 (Sprint 9/14 교체).
-- **실측 grep (`~/.claude/projects/-Users-yonghaekim/memory/`)** — stale 주장 vs 정당한 이력의 경계가 데이터에 그대로 드러남:
+- **실측 grep (`~/.claude/projects/<home-slug>/memory/`)** — stale 주장 vs 정당한 이력의 경계가 데이터에 그대로 드러남:
   - **stale 주장 (현재형, 현행 값 미언급)**: `feedback_no_v1_token_waste.md:15` "BGE-M3 임베딩이 형 메시지 어디든 0.7+ 매칭…" / `feedback_no_api_default.md:21` "임베딩처럼 … 로컬(fastembed/BGE-M3)으로". 모델명이 현행과 다른데 'arctic' 언급 없음.
   - **정당한 이력 (현행 값 동반 명시)**: `project_mindvault.md:17` "임베딩: …arctic… (Sprint 9 BGE-M3 → 교체)" / `project_mindvault_v1v2_history.md` "v2 BGE-M3 → v3 Arctic-ko 교체". 'BGE-M3' 와 'arctic' 을 **함께** 담아 전환을 명시 → stale 아님.
   - **(부수 발견) 코드 주석 stale**: `src/memory_search.py:516` docstring "BGE-M3는 잡담에도 0.6-0.75 매칭" — 코드 내 stale 표기. 메모리 scan 범위 밖이라 ③에서는 보고만(§7).

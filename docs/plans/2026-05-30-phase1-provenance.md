@@ -383,7 +383,7 @@ Expected: 전체 PASS
 
 - [ ] **Step 5: 실 메모리 백필 dry-run (사용자 확인용)**
 
-Run: `python -m src.provenance_backfill_cli ~/.claude/projects/-Users-yonghaekim/memory`
+Run: `python -m src.provenance_backfill_cli ~/.claude/projects/<home-slug>/memory`
 Expected: `dry-run: N건` 출력. 사용자가 N 확인 후 `--apply` 결정.
 
 - [ ] **Step 6: 전체 회귀 + 커밋**
