@@ -295,27 +295,106 @@ def _stage_with_conflict_resolution(
     return written
 
 
+# v4 P3: Codex Stop turn 멱등키 저장소 (S2 스펙 §Stop — stop_hook_active
+# 재진입·중복 전달에서 같은 turn 의 이중 추출 방지).
+_CODEX_TURNS_SEEN = _MV3_DATA_DIR / "codex_turns_seen.jsonl"
+_CODEX_TURNS_CAP = 1000   # 초과 시 트림
+_CODEX_TURNS_KEEP = 500   # 트림 후 보존 개수
+
+
+def _codex_turn_seen_and_mark(sid: str, turn: str) -> bool:
+    """(session_id, turn_id) 멱등키 체크 후 기록. True = 이미 처리한 turn.
+
+    실패는 False 로 fail-open — 최악이 중복 추출인데 extractor 의 prompt
+    SHA256 캐시가 흡수한다. flock 으로 동시 Stop 발화 경합 보호.
+    """
+    key = f"{sid}\t{turn}"
+    try:
+        import fcntl
+        _CODEX_TURNS_SEEN.parent.mkdir(parents=True, exist_ok=True)
+        with _CODEX_TURNS_SEEN.open("a+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.seek(0)
+            lines = f.read().splitlines()
+            if key in lines:
+                return True
+            lines.append(key)
+            if len(lines) > _CODEX_TURNS_CAP:
+                tmp = _CODEX_TURNS_SEEN.with_suffix(".tmp")
+                tmp.write_text(
+                    "\n".join(lines[-_CODEX_TURNS_KEEP:]) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(tmp, _CODEX_TURNS_SEEN)
+            else:
+                f.seek(0, 2)
+                f.write(key + "\n")
+            return False
+    except Exception as e:
+        _debug(f"codex turn-seen store fail (fail-open): {type(e).__name__}: {e}")
+        return False
+
+
+def _codex_stop_transcript(payload: dict) -> Path | None:
+    """Codex Stop payload → 추출 대상 transcript 경로. None = skip (fail-open).
+
+    S2 계약: transcript_path null·파일 없음·중복 turn 전부 exit 0 경로.
+    """
+    tp = payload.get("transcript_path")
+    if not tp or not isinstance(tp, str):
+        _debug("codex-stop: transcript_path 없음 — skip")
+        return None
+    p = Path(tp).expanduser()
+    if not p.is_file():
+        _debug(f"codex-stop: transcript 파일 없음 — skip ({p.name})")
+        return None
+    sid = str(payload.get("session_id") or "")
+    turn = str(payload.get("turn_id") or "")
+    if sid and turn and _codex_turn_seen_and_mark(sid, turn):
+        _debug(f"codex-stop: turn 중복 — skip ({sid[:8]}/{turn[:8]})")
+        return None
+    _debug(f"codex-stop: extract {p.name} ({sid[:8]}/{turn[:8]})")
+    return p
+
+
 def main() -> int:
     try:
         raw = sys.stdin.read() if not sys.stdin.isatty() else ""
         sid = os.environ.get("CLAUDE_SESSION_ID", "")
+        payload = None
         if raw:
             try:
-                d = json.loads(raw)
-                sid = d.get("sessionId") or d.get("session_id") or sid
+                payload = json.loads(raw)
             except json.JSONDecodeError:
-                pass
-        if not sid:
-            _debug("no session id; skip")
-            return 0
+                payload = None
+        if isinstance(payload, dict):
+            sid = payload.get("sessionId") or payload.get("session_id") or sid
 
-        matches = sorted(PROJECTS_ROOT.glob(f"*/{sid}.jsonl"))
-        if not matches:
-            _debug(f"jsonl missing for {sid[:8]}")
-            return 0
-        jsonl = matches[0]
-        if len(matches) > 1:
-            _debug(f"jsonl multi-hit for {sid[:8]}: picked {jsonl.parent.name}")
+        # v4 P3: Codex Stop 분기 — transcript 경로를 payload 가 직접 주므로
+        # PROJECTS_ROOT glob 을 타지 않는다. 이후 파이프라인(추출→reverify→
+        # compile→staged→index/alias)은 Claude 경로와 완전 공유.
+        jsonl: Path | None = None
+        if (
+            isinstance(payload, dict)
+            and payload.get("hook_event_name") == "Stop"
+            and "transcript_path" in payload
+        ):
+            jsonl = _codex_stop_transcript(payload)
+            if jsonl is None:
+                return 0
+            sid = str(payload.get("session_id") or "codex-unknown")
+
+        if jsonl is None:
+            if not sid:
+                _debug("no session id; skip")
+                return 0
+            matches = sorted(PROJECTS_ROOT.glob(f"*/{sid}.jsonl"))
+            if not matches:
+                _debug(f"jsonl missing for {sid[:8]}")
+                return 0
+            jsonl = matches[0]
+            if len(matches) > 1:
+                _debug(f"jsonl multi-hit for {sid[:8]}: picked {jsonl.parent.name}")
 
         candidates = extract_from_jsonl(jsonl)
 

@@ -15,9 +15,10 @@ if [ "${MV3_HOOK_RECURSION_GUARD:-}" = "1" ]; then
 fi
 
 # NEXT-19 hook subprocess env 강제 (위 주석 참조)
+# [2026-07-21] MV3_GEMMA_INTENT export 제거 — session-end 경로는 이 env 를 읽지
+# 않고(query_intent 는 recall hot path 전용), 전역 off 결정과 표기 일관 유지.
 export MV3_AUTO_COMPILE=1
 export MV3_EXTRACTOR_ALWAYS_FIRE=1
-export MV3_GEMMA_INTENT=1
 
 TMP_DIR="${TMPDIR:-/tmp}"
 TMP_STDIN=$(mktemp "${TMP_DIR}/mindvault-end-stdin.XXXXXX") || exit 0
