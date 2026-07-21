@@ -5,6 +5,7 @@
 
 set -euo pipefail
 
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOOKS_DIR="$HOME/.claude/hooks"
 SETTINGS="$HOME/.claude/settings.json"
 INSTALL_MANIFEST="$HOME/.claude/mindvault-v3/.install-manifest"
@@ -36,6 +37,15 @@ remove_gemma_assets() {
 if [ "${MV3_UNINSTALL_GEMMA_ONLY:-0}" = "1" ]; then
   remove_gemma_assets
   exit 0
+fi
+
+# Optional Codex integration must be unwired before the shared Claude recall
+# hook is removed, otherwise ~/.codex/hooks.json retains a broken command.
+CODEX_HOOK_MANAGER="$REPO_DIR/scripts/manage_codex_recall.py"
+if [ -f "$CODEX_HOOK_MANAGER" ] && command -v python3 >/dev/null 2>&1; then
+  if ! python3 "$CODEX_HOOK_MANAGER" uninstall >/dev/null; then
+    echo "⚠ failed to remove optional Codex recall hook; run: python3 $CODEX_HOOK_MANAGER uninstall" >&2
+  fi
 fi
 
 # v3.2.3 (#22) — MV3_SCRIPTS_DIR override 존중. install 과 동일 변수 사용.

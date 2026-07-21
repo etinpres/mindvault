@@ -126,6 +126,23 @@ cd mindvault-v3
 
 설치 확인: 새 `claude` 세션을 열면 system-reminder에 `# 지난 세션 요약 (MindVault v3)` 블록이 나타납니다.
 
+### Codex와 기억 공유
+
+Claude Code와 Codex가 같은 MindVault 메모리를 자동 회수하게 하려면 MindVault 설치 후 Codex 회수 훅을 별도로 등록합니다.
+
+```bash
+python3 scripts/manage_codex_recall.py install
+```
+
+이 명령은 기존 `~/.codex/hooks.json` 항목을 보존하면서 `UserPromptSubmit`에 배포된 `~/.claude/hooks/memory-recall.py`를 읽기 전용 회수 훅으로 연결합니다. Codex는 최초 실행 전 `/hooks`에서 새 훅을 검토·신뢰해야 하며, 변경 사항은 새 Codex 세션부터 적용됩니다.
+
+```bash
+python3 scripts/manage_codex_recall.py status
+python3 scripts/manage_codex_recall.py uninstall
+```
+
+Codex와 Claude Code가 같은 메모리 디렉토리에 쓰는 환경에서는 이 연결로 양쪽 모두 같은 hybrid FTS5+vector 검색 결과를 자동 주입받습니다. 이는 영구 메모리 공유이며, 아직 저장되지 않은 실시간 대화 전체를 동기화하지는 않습니다.
+
 ## 사용
 
 ### `/recall` — 자연어 검색
@@ -210,6 +227,7 @@ pytest tests/
 
 훅 등록 + 스크립트 + 스킬 + launchd 서비스 일괄 제거:
 
+- 선택 설치한 Codex `UserPromptSubmit` MindVault 회수 훅
 - `com.mindvault.gemma-mlx` (v3.2.0+ Gemma)
 - `com.mindvault.arctic-ko-mlx` (v3.2.3+ Arctic-ko)
 - legacy: `com.yonghaekim.{arctic-ko-mlx,bge-m3-mlx,mv3-env,mv3-gemma-intent,mv3-stats-daily}` (옛 설치자 호환 cleanup)
