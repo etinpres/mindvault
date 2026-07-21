@@ -791,7 +791,8 @@ fi  # MV3_SYNC_ONLY — Arctic-ko 헬스 대기 skip
 # v3.2.3 (#19): stale memory-recall.py path entries 도 cleanup 후 새 target 등록 —
 # 옛 path 잔존 시 새 hook 등록이 막혔던 idempotency 결함 fix.
 if [ "$MEMORY_HOOK_DEPLOYED" = "1" ]; then
-  python3 - "$MEMORY_HOOK_TARGET" "$SETTINGS" <<'PY'
+  # v4 P1: MV3_AGENT=claude 명시 — 회수 계측의 에이전트 소스 태깅 (codex 쪽은 manage_codex_recall.py 가 대칭 태깅)
+  python3 - "MV3_AGENT=claude $MEMORY_HOOK_TARGET" "$SETTINGS" <<'PY'
 import json, os, sys
 from pathlib import Path
 

@@ -395,6 +395,13 @@ def main() -> int:
         if len(prompt) < MIN_PROMPT_LEN:
             return 0
 
+        # v4 P1: 발화 에이전트 태깅 — hook 등록 command 가 MV3_AGENT 를 명시
+        # (claude=install.sh, codex=manage_codex_recall.py). 미설정·비인가 값은
+        # "unknown" — 수동 실행·제3 소비자를 claude 로 오분류하지 않는다.
+        agent = _os.environ.get("MV3_AGENT", "").strip()
+        if agent not in ("claude", "codex"):
+            agent = "unknown"
+
         # NEXT-31 (2026-05-24): _mtime_changed() 자체가 500+ stat 호출 (메모리
         # 디렉토리 5×100건 + _procedural). SPAWN_LOCK age 가 SPAWN_THROTTLE_SEC
         # 이내라면 이미 reindex spawn 직후라 어차피 throttle 로 skip 되므로
@@ -436,6 +443,7 @@ def main() -> int:
                 _metric({
                     "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "kind": "recall_skip",
+                    "agent": agent,
                     "reason": f"intent:{intent_label}",
                     "intent": intent_label,
                     "matched": intent_match,
@@ -476,6 +484,7 @@ def main() -> int:
         _metric({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "kind": "recall",
+            "agent": agent,
             "query_len": len(prompt),
             "elapsed_ms": elapsed_ms,
             "picked": len(results),
@@ -490,7 +499,8 @@ def main() -> int:
             ],
         })
         _debug(
-            f"query_len={len(prompt)} picked={len(results)} elapsed_ms={elapsed_ms}"
+            f"agent={agent} query_len={len(prompt)} "
+            f"picked={len(results)} elapsed_ms={elapsed_ms}"
         )
 
         if not results:
