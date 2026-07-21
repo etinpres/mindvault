@@ -310,3 +310,4 @@ metadata:
 ## 개정 이력
 
 - [2026-07-21] 초판 작성 (Claude Code) → Codex 리뷰 반영 개정: ① 자동 트리거(P3·S4) v4 편입 ② 신규 설치 경로(P4 + S3 repo 템플릿화) ③ 테스트 기준선 936 정정 ④ v3.10.0 태그 예정 표기 ⑤ `MV3_AGENT` 미설정=unknown + 양측 명시 env ⑥ fixture gitleaks 게이트.
+- [2026-07-22] **전 태스크 완료 — v4.0.0 릴리스.** S1~S4(Codex)·P1~P4(Claude Code) 구현, X1 교차 검수 왕복(Codex→P 검수 5결함 → f5c95d5 수정 → 재검 통과, Claude→S 검수 1차 지적 0건). 릴리스 기준: ①agent 양쪽 실기록 ②실 Stop 자동 추출→review 승인 ③close-session 실사용(기존 파일 갱신 경로 — 신규 파일 생성 경로는 미실행, 운영 중 자연 발생 시 확인) ④양방향 주입 재확인 ⑤gitleaks ⑥설치 시뮬 왕복. 최종 회귀 959 passed·2 skipped·41 subtests.

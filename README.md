@@ -1,8 +1,8 @@
-# MindVault v3
+# MindVault
 
-> Claude Code의 영구 기억 시스템. 5-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수 · 모순 감지까지.
+> Claude Code·Codex의 공유 영구 기억 시스템. 5-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수 · 모순 감지까지 — 두 에이전트가 같은 기억을 회수·추출·저장·계측한다.
 
-**v3.9.0** · gbrain 차용 — **Contextual Retrieval**(body 임베딩에 맥락 선붙임, 로컬 Gemma synopsis, off 기본·회귀 0) + **Eval Gate**(라벨 코퍼스 P@k/R@k/MRR 회귀 게이트) · A/B 실측 = MV 의 description 별도벡터가 이미 맥락 내장이라 CR 검색개선 0 → 기본 off·게이트는 회귀보호 · 2-track 적대검증(Claude 15R + codex 5패스, ~33결함 수정) · 이전: MEMORY.md 200줄 회피·Gemma 12B 교체·6R 적대점검 · macOS (Apple Silicon) · MIT license · 927 passed + 41 subtests
+**v4.0.0** · **멀티에이전트 공유 기억** — Claude Code+Codex가 같은 MindVault를 전 생명주기(회수·추출·저장·계측)로 공유. Codex `UserPromptSubmit` 자동 회수(어댑터 없는 직결) + turn-scope `Stop` 자동 추출(rollout 로더, `(session,turn)` 멱등키) + close-session 저장 규약 + install.sh Codex 자동 통합(감지 시 hook·스킬·AGENTS 규약 배포) · `agent` 태깅 계측(claude/codex/unknown) · 교차 검수 왕복(Codex 검수 5결함 수정 수렴, 실운영 E2E 실증) · 이전: v3.10.0 Codex 회수 연결 · macOS (Apple Silicon) · MIT license · 959 passed + 41 subtests
 
 ---
 
@@ -10,7 +10,7 @@
 
 Claude Code는 매 세션마다 컨텍스트 윈도우가 초기화됩니다. 어제 결정한 사실, 만들어 둔 CLI 위치, 진행 중인 프로젝트 상태 — 다음 세션을 열면 모두 사라집니다.
 
-MindVault v3는 그 망각의 빈 자리를 네 축으로 메웁니다:
+MindVault는 그 망각의 빈 자리를 네 축으로 메웁니다:
 
 1. **세션 검색** — 모든 과거 .jsonl 로그를 SQLite FTS5 + 임베딩으로 인덱싱, `/recall` 자연어 검색
 2. **메모리 회수** — UserPromptSubmit 마다 hybrid 검색으로 관련 메모리를 system-reminder에 자동 주입
@@ -29,7 +29,7 @@ MindVault v3는 그 망각의 빈 자리를 네 축으로 메웁니다:
 질문 → 외부 문서 N개 검색 → 그대로 컨텍스트에 붙임 → LLM이 매번 재해석
   ↑ 매번 비용. 매번 같은 노이즈. 매번 같은 추론.
 
-# LLM-as-Compiler 패턴 (MindVault v3)
+# LLM-as-Compiler 패턴 (MindVault)
 세션 끝 → Gemma가 한 번 정제 → 작은 .md로 저장 → 다음부턴 정제본만 조회
   ↑ 한 번 비용. 추출 후엔 깨끗한 신호. 누적되며 자기 강화.
 ```
@@ -105,8 +105,8 @@ MindVault v3는 그 망각의 빈 자리를 네 축으로 메웁니다:
 ## 설치
 
 ```bash
-git clone https://github.com/etinpres/mindvault-v3.git
-cd mindvault-v3
+git clone https://github.com/etinpres/mindvault.git
+cd mindvault
 ./install.sh
 ```
 
