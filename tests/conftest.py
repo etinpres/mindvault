@@ -48,6 +48,7 @@ for _p in (_WORKTREE_HOOKS, _WORKTREE_SRC):
 _MV3_MODULES = (
     "session_memory_end", "session_memory", "memory_search", "memory_indexer",
     "memory_extractor", "memory_compiler", "memory_review_cli",
+    "codex_session_loader",
     "extractor_cache", "extractor_stats_cli", "query_intent", "turns_cache",
     "backfill_cli", "dedup_cli", "alias_generator", "sources_cli",
     "eval_top3_domain", "self_eval", "search",

@@ -552,9 +552,25 @@ def _union_by_title(*lists: list[dict]) -> list[dict]:
     return merged
 
 
+def _load_messages_routed(jsonl_path: Path) -> list[dict]:
+    """v4 P2: 파일 스키마로 Claude/Codex 로더 라우팅.
+
+    경로가 아니라 첫 레코드의 envelope 로 판별 — fixture·백필처럼
+    ~/.codex/sessions/ 밖에 있는 rollout 도 정상 인식. 로더 import 실패는
+    Claude 경로로 fail-open.
+    """
+    try:
+        from codex_session_loader import is_codex_rollout, load_tail_messages_codex
+        if is_codex_rollout(jsonl_path):
+            return load_tail_messages_codex(jsonl_path, tail_turns=_tail_turns())
+    except Exception as e:
+        _debug(f"codex loader unavailable ({type(e).__name__}: {e}); claude fallback")
+    return load_tail_messages(jsonl_path, tail_turns=_tail_turns())
+
+
 def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
     try:
-        msgs = load_tail_messages(jsonl_path, tail_turns=_tail_turns())
+        msgs = _load_messages_routed(jsonl_path)
         if not msgs:
             return []
         if not has_trigger(msgs):
