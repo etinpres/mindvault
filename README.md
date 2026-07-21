@@ -128,7 +128,7 @@ cd mindvault-v3
 
 ### Codex와 기억 공유
 
-Claude Code와 Codex가 같은 MindVault 메모리를 자동 회수하게 하려면 MindVault 설치 후 Codex 회수 훅을 별도로 등록합니다.
+`./install.sh`가 `~/.codex/`를 감지하면 Codex 통합을 자동으로 설치합니다 — 회수 훅 등록, `$close-session` 스킬(`~/.agents/skills/close-session/`) 배포, `AGENTS.md`에 MindVault 메모리 규약 삽입(`<!-- MINDVAULT_MEMORY_* -->` 마커 사이 idempotent 갱신, 기존 내용 보존). Codex가 없는 환경에서는 이 단계가 조용히 생략됩니다. 훅만 수동으로 다루려면:
 
 ```bash
 python3 scripts/manage_codex_recall.py install

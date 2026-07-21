@@ -48,6 +48,31 @@ if [ -f "$CODEX_HOOK_MANAGER" ] && command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
+# v4 P4: Codex close-session 스킬 + AGENTS.md snippet 제거 (install.sh 대칭).
+CODEX_HOME="${MV3_CODEX_HOME:-$HOME/.codex}"
+CODEX_SKILLS_DIR="${MV3_CODEX_SKILLS_DIR:-$HOME/.agents/skills}"
+rm -f "$CODEX_SKILLS_DIR/close-session/SKILL.md" 2>/dev/null || true
+rmdir "$CODEX_SKILLS_DIR/close-session" 2>/dev/null || true
+CODEX_AGENTS_MD="${MV3_CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+if [ -f "$CODEX_AGENTS_MD" ] && command -v python3 >/dev/null 2>&1; then
+  python3 - "$CODEX_AGENTS_MD" <<'PY' || true
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+START = "<!-- MINDVAULT_MEMORY_START -->"
+END = "<!-- MINDVAULT_MEMORY_END -->"
+t = p.read_text(encoding="utf-8")
+if START in t and END in t:
+    pre, rest = t.split(START, 1)
+    _, post = rest.split(END, 1)
+    new = pre.rstrip("\n") + "\n" + post.lstrip("\n")
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(new.lstrip("\n"), encoding="utf-8")
+    tmp.replace(p)
+PY
+fi
+
 # v3.2.3 (#22) — MV3_SCRIPTS_DIR override 존중. install 과 동일 변수 사용.
 # (HOOK_TARGETS 보다 먼저 정의 — bug-audit 2026-06-02 #7 의 drift hook 경로 매칭용.)
 SCRIPTS_DIR="${MV3_SCRIPTS_DIR:-$HOME/.claude/scripts/mindvault}"

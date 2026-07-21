@@ -935,6 +935,69 @@ PY
   fi
 fi
 
+# ── v4 P4: Codex 통합 — ~/.codex 존재 시 hook·close-session 스킬·AGENTS 규약 배포 ──
+# Claude 단독 사용자는 조용히 skip (신규 설치자 경로 — Codex 리뷰 반영).
+# 시뮬레이션 override: MV3_CODEX_HOME / MV3_CODEX_SKILLS_DIR / MV3_CODEX_AGENTS_MD.
+CODEX_HOME="${MV3_CODEX_HOME:-$HOME/.codex}"
+if [ -d "$CODEX_HOME" ]; then
+  # ① recall hook 등록 — hooks.json 은 manage_codex_recall.py 가 단일 작성자
+  #    (S4 이후 stop hook 등록도 같은 스크립트가 담당).
+  if python3 "$REPO_DIR/scripts/manage_codex_recall.py" install \
+      --config "$CODEX_HOME/hooks.json" >/dev/null 2>&1; then
+    echo "✓ Codex recall hook registered ($CODEX_HOME/hooks.json)"
+  else
+    echo "⚠️  Codex recall hook 등록 실패 — 수동: python3 scripts/manage_codex_recall.py install"
+    DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+  fi
+  # ② close-session 스킬 배포 (repo 템플릿 codex/ 가 정본)
+  CODEX_SKILL_SRC="$REPO_DIR/codex/close-session/SKILL.md"
+  CODEX_SKILLS_DIR="${MV3_CODEX_SKILLS_DIR:-$HOME/.agents/skills}"
+  if [ -f "$CODEX_SKILL_SRC" ]; then
+    if mkdir -p "$CODEX_SKILLS_DIR/close-session" \
+        && cp "$CODEX_SKILL_SRC" "$CODEX_SKILLS_DIR/close-session/SKILL.md"; then
+      echo "✓ Codex close-session skill → $CODEX_SKILLS_DIR/close-session/"
+    else
+      DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+    fi
+  fi
+  # ③ AGENTS.md 규약 snippet — 마커 사이 idempotent 교체 (사용자 내용 보존)
+  CODEX_AGENTS_MD="${MV3_CODEX_AGENTS_MD:-$CODEX_HOME/AGENTS.md}"
+  if [ -f "$REPO_DIR/codex/AGENTS-mindvault-snippet.md" ]; then
+    if python3 - "$REPO_DIR/codex/AGENTS-mindvault-snippet.md" "$CODEX_AGENTS_MD" <<'PY'
+import sys
+from pathlib import Path
+
+snippet_path, agents_path = Path(sys.argv[1]), Path(sys.argv[2])
+START = "<!-- MINDVAULT_MEMORY_START -->"
+END = "<!-- MINDVAULT_MEMORY_END -->"
+snippet = snippet_path.read_text(encoding="utf-8").strip() + "\n"
+if not (snippet.startswith(START) and snippet.rstrip().endswith(END)):
+    print("snippet 마커 불일치 — skip", file=sys.stderr)
+    sys.exit(1)
+text = agents_path.read_text(encoding="utf-8") if agents_path.exists() else ""
+if START in text and END in text:
+    pre, rest = text.split(START, 1)
+    _, post = rest.split(END, 1)
+    new = pre + snippet.rstrip("\n") + post
+else:
+    sep = "" if not text else ("\n" if text.endswith("\n") else "\n\n")
+    new = text + sep + snippet
+if new != text:
+    tmp = agents_path.with_suffix(agents_path.suffix + ".tmp")
+    tmp.write_text(new, encoding="utf-8")
+    tmp.replace(agents_path)
+PY
+    then
+      echo "✓ Codex AGENTS.md MindVault 규약 반영 ($CODEX_AGENTS_MD)"
+    else
+      echo "⚠️  Codex AGENTS.md snippet 반영 실패"
+      DEPLOY_FAILURES=$((DEPLOY_FAILURES+1))
+    fi
+  fi
+else
+  echo "↷ Codex 미감지 ($CODEX_HOME 없음) — Codex 통합 skip"
+fi
+
 echo ""
 # v3.2.7: manifest atomic commit — 여기까지 도달했으면 모든 deploy 단계가
 # set -e 를 통과. tmp → final 로 atomic mv (os.rename 동치).
