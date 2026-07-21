@@ -100,7 +100,7 @@ def _remove_managed_handlers(
 
 
 def _managed_entry(recall_hook: Path) -> dict[str, Any]:
-    command = f"{shlex.quote(str(recall_hook))} # {HOOK_MARKER}"
+    command = f"MV3_AGENT=codex {shlex.quote(str(recall_hook))} # {HOOK_MARKER}"
     return {
         "hooks": [
             {

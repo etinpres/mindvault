@@ -54,6 +54,7 @@ class TestCodexRecallHookManager(unittest.TestCase):
         self.assertEqual(data["hooks"]["SessionStart"], herdr["hooks"]["SessionStart"])
         registered = data["hooks"]["UserPromptSubmit"][0]["hooks"][0]
         self.assertIn(MANAGER.HOOK_MARKER, registered["command"])
+        self.assertTrue(registered["command"].startswith("MV3_AGENT=codex "))
         self.assertIn(str(self.hook.resolve()), registered["command"])
         self.assertEqual(registered["timeout"], 2)
 
