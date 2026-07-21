@@ -89,6 +89,8 @@ def _call_gemma(prompt: str, max_tokens: int = 800) -> str | None:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.2,
+            # mem-fan-fix 2026-06-19: thinking off (top-level, 12B 전용). peak 폭증 방지.
+            "enable_thinking": False,
         }
     ).encode()
     req = urllib.request.Request(

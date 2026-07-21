@@ -92,6 +92,10 @@ def call_gemma(prompt: str, max_tokens: int = 1500) -> str | None:
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.3,
+            # mem-fan-fix 2026-06-19: thinking ON 시 reasoning 토큰 생성으로 KV/activation
+            # peak 폭증(gemma 서버 peak 22GB 관측). 단순 변환이라 off 가 품질 동일·3~7배 빠름.
+            # 12B 는 top-level 키만 먹힘(chat_template_kwargs 무효 — CLAUDE.md gemma 규약).
+            "enable_thinking": False,
         }
     ).encode()
     req = urllib.request.Request(
