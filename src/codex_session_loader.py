@@ -73,7 +73,9 @@ def is_codex_rollout(jsonl_path: Path) -> bool:
                 try:
                     d = json.loads(line)
                 except json.JSONDecodeError:
-                    return False
+                    # X1-R1: "첫 유효 레코드" 계약 — malformed 줄은 건너뛰고
+                    # 다음 파싱 가능한 레코드로 판별 (스펙: 손상 fail-open).
+                    continue
                 return (
                     isinstance(d, dict)
                     and d.get("type") in _CODEX_TOP_TYPES
@@ -151,8 +153,11 @@ def load_tail_messages_codex(jsonl_path: Path, tail_turns: int = 40) -> list[dic
                     raw = payload.get("input")
                     if not isinstance(raw, str):
                         continue
+                    # X1-R1: Claude loader(extract_bash_from_content)와 대칭 —
+                    # 명령 문자열에도 redact 적용 (비밀값 스테이징 차단).
                     cmds = [
-                        _unescape_cmd(m) for m in _CMD_LITERAL_RE.findall(raw)
+                        _redact(_unescape_cmd(m))
+                        for m in _CMD_LITERAL_RE.findall(raw)
                     ]
                     if cmds:
                         msgs.append(

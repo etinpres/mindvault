@@ -450,7 +450,8 @@ def main() -> int:
                     "query_len": len(prompt),
                 })
                 _debug(
-                    f"skip recall intent={intent_label} match={intent_match!r}"
+                    f"skip recall agent={agent} intent={intent_label} "
+                    f"match={intent_match!r}"
                 )
                 return 0
         except _Timeout:

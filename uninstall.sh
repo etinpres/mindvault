@@ -42,14 +42,16 @@ fi
 # Optional Codex integration must be unwired before the shared Claude recall
 # hook is removed, otherwise ~/.codex/hooks.json retains a broken command.
 CODEX_HOOK_MANAGER="$REPO_DIR/scripts/manage_codex_recall.py"
+# v4 X1-R1: install 과 동일하게 MV3_CODEX_HOME override 를 --config 로 전달
+# (미전달 시 기본 ~/.codex/hooks.json 을 건드리는 비대칭 — Codex 검수 Medium).
+CODEX_HOME="${MV3_CODEX_HOME:-$HOME/.codex}"
 if [ -f "$CODEX_HOOK_MANAGER" ] && command -v python3 >/dev/null 2>&1; then
-  if ! python3 "$CODEX_HOOK_MANAGER" uninstall >/dev/null; then
+  if ! python3 "$CODEX_HOOK_MANAGER" uninstall --config "$CODEX_HOME/hooks.json" >/dev/null; then
     echo "⚠ failed to remove optional Codex recall hook; run: python3 $CODEX_HOOK_MANAGER uninstall" >&2
   fi
 fi
 
 # v4 P4: Codex close-session 스킬 + AGENTS.md snippet 제거 (install.sh 대칭).
-CODEX_HOME="${MV3_CODEX_HOME:-$HOME/.codex}"
 CODEX_SKILLS_DIR="${MV3_CODEX_SKILLS_DIR:-$HOME/.agents/skills}"
 rm -f "$CODEX_SKILLS_DIR/close-session/SKILL.md" 2>/dev/null || true
 rmdir "$CODEX_SKILLS_DIR/close-session" 2>/dev/null || true

@@ -9,11 +9,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from codex_session_loader import is_codex_rollout, load_tail_messages_codex
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "codex_sessions"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_interactive_fixture_normalized():
@@ -98,6 +97,43 @@ def test_malformed_lines_fail_open(tmp_path):
     broken.write_text("{not json}\n" + src + "\n{\"type\": \"future_type\"}\n")
     msgs = load_tail_messages_codex(broken)
     assert [m["text"] for m in msgs] == ["Reply exactly EXEC_OK.", "EXEC_OK"]
+
+
+def test_bash_commands_redacted(tmp_path):
+    """X1-R1 High: Claude loader 와 대칭으로 cmd 문자열에도 redact() 적용."""
+    secret = "sk-abcdefghijklmnopqrstuvwx"
+    rollout = tmp_path / "rollout-secret.jsonl"
+    lines = [
+        {"type": "turn_context", "payload": {"turn_id": "t1"}},
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "c1",
+            "input": 'const r = await tools.exec_command({cmd: "curl -H '
+                     f'{secret}", workdir: "/w"}})',
+        }},
+    ]
+    rollout.write_text("\n".join(json.dumps(d) for d in lines))
+    msgs = load_tail_messages_codex(rollout)
+    assert len(msgs) == 1
+    assert secret not in msgs[0]["bash_commands"][0]
+    assert "[REDACTED_KEY]" in msgs[0]["bash_commands"][0]
+
+
+def test_installer_deploys_loader_module():
+    """X1-R1 High: 배포 누락 회귀 가드 — install.sh 배포 목록에 로더 포함.
+
+    실운영에서 ModuleNotFoundError → Claude fallback 으로 자동 추출이 조용히
+    무력화됐던 결함. 파일명이 배포 배열에서 빠지면 즉시 실패해야 한다.
+    """
+    install_sh = (REPO_ROOT / "install.sh").read_text(encoding="utf-8")
+    assert "codex_session_loader.py" in install_sh
+
+
+def test_is_codex_rollout_skips_leading_malformed(tmp_path):
+    """X1-R1 Low: '첫 유효 레코드' 계약 — 선행 malformed 줄은 건너뛰고 판별."""
+    src = (FIXTURES / "exec.jsonl").read_text()
+    broken = tmp_path / "rollout-lead-broken.jsonl"
+    broken.write_text("{not json}\n\n" + src)
+    assert is_codex_rollout(broken) is True
 
 
 def test_is_codex_rollout_detection(tmp_path):
