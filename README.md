@@ -6,6 +6,30 @@
 
 ---
 
+## AI에게 설치 맡기기 (추천)
+
+Claude Code 또는 Codex에 아래 프롬프트를 그대로 붙여넣으면 환경 확인부터 설치·검증까지 AI가 진행합니다.
+
+```
+https://github.com/etinpres/mindvault 저장소의 README를 읽고 MindVault를 설치해줘.
+
+진행 방식:
+1. 먼저 내 환경을 확인해줘 — macOS Apple Silicon(arm64)인지, Python 3.10 이상인지,
+   Claude Code가 설치돼 있는지. 지원 안 되는 환경(Intel Mac/Linux/Windows)이면
+   설치를 시작하지 말고 이유를 알려줘.
+2. 지원 환경이면 저장소를 clone 하고 ./install.sh 를 실행해줘. 첫 실행은 로컬 모델
+   다운로드(Gemma ~3GB + 임베딩 모델) 때문에 8~12분 걸리고, 중간에 실패해도
+   재실행하면 이어서 진행되니 그대로 다시 돌려줘.
+3. 설치가 ~/.claude/settings.json 의 hook 배열을 수정한다는 점(자동 .bak 백업됨)을
+   미리 알려주고 진행해줘. Codex(~/.codex)가 있으면 Codex 연동도 자동 설치되는데,
+   이 경우 새 Codex 세션에서 /hooks 로 새 hook을 한 번 검토·신뢰해야 한다고 안내해줘.
+4. 설치 후 검증: 새 claude 세션을 열었을 때 "# 지난 세션 요약 (MindVault v3)" 블록이
+   나타나는지, /recall <아무 검색어> 가 동작하는지 확인하고 결과를 알려줘.
+5. 제거가 필요하면 ./uninstall.sh 하나로 전부 되돌릴 수 있다는 것도 알려줘.
+```
+
+---
+
 ## 무엇인가
 
 Claude Code는 매 세션마다 컨텍스트 윈도우가 초기화됩니다. 어제 결정한 사실, 만들어 둔 CLI 위치, 진행 중인 프로젝트 상태 — 다음 세션을 열면 모두 사라집니다.
