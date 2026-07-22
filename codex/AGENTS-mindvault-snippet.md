@@ -16,6 +16,7 @@ metadata:
 
 Memory maintenance rules:
 
+0. The MindVault memory directory is the slot under `~/.claude/projects/*/memory/` whose `MEMORY.md` was most recently updated, unless another instruction in this file declares a different writable path. If it cannot be resolved, ask the user instead of guessing.
 1. Search the active `memory/` directory first and update an existing relevant file instead of creating a duplicate.
 2. When a new file is necessary, add one index line to `MEMORY.md`; put `procedural` entries in `MEMORY-PROCEDURAL.md` and `feedback` entries in `MEMORY-FEEDBACK.md` instead, preserving the 200-line limit of `MEMORY.md`.
 3. Keep the existing secret and personal-information exclusions in force. Never store credentials, authentication material, financial identifiers, detailed addresses, or unnecessary direct contact information.

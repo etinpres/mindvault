@@ -9,7 +9,7 @@ Review the current session while its context is still available, then persist on
 
 ## Resolve the memory directory
 
-Use the writable MindVault or Obsidian `memory/` directory declared by the active `AGENTS.md`. If no active instruction identifies a writable memory directory, stop and ask the user instead of guessing a path.
+Use the writable MindVault `memory/` directory declared by the active `AGENTS.md`. If no instruction declares one, use the default MindVault slot: the directory under `~/.claude/projects/*/memory/` whose `MEMORY.md` was most recently updated. If neither resolves, stop and ask the user instead of guessing a path.
 
 Treat direct Markdown search in that directory as the freshness source of truth. Do not rely on a delayed semantic index when deciding whether a relevant file already exists.
 
@@ -76,6 +76,6 @@ After writing:
 2. Confirm new frontmatter parses as YAML and `metadata.type` is one of the five allowed values.
 3. Confirm every new fact has a date tag and every newly created file has exactly one index entry in the correct index.
 4. Scan the changed text for secrets and unnecessary personal identifiers.
-5. Do not manually force a Graphify refresh; allow the configured background indexer to propagate the change.
+5. If a background indexer watches the memory directory, let it propagate the change on its own schedule; do not force a manual refresh.
 
 Report the files updated or created, their memory types, and any candidate deliberately skipped. Keep the report concise and never repeat sensitive values.
