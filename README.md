@@ -270,7 +270,7 @@ rm -rf ~/.cache/mlx-arctic-ko
 2. **로컬 LLM 은 Gemma 4 E4B (`mlx-community/gemma-4-e4b-it-4bit`) 만 지원** — ollama / LM Studio / llama.cpp / OpenAI API / 기타 LLM 사용 불가. 사전 설치 안 된 환경은 `install.sh` 가 자동 설치, 사전 설치된 환경은 자동 감지.
 3. **임베딩은 Arctic-ko (`dragonkue/snowflake-arctic-embed-l-v2.0-ko`, MLX 4bit) 만 지원** — 다른 임베딩 모델 사용 불가.
 4. **Gemma 4 E4B는 reasoning 모델** — 내부 사고에 토큰 많이 소비, `GEMMA_MAX_TOKENS` 크게 잡아야 함
-5. **한국어 특화 프롬프트** — 프롬프트가 한국어로 최적화. 영어 도메인은 검색 품질 일부 저하 가능
+5. **한국어 특화 (Korean-first)** — 임베딩 모델(Arctic-ko 한국어 파인튜닝)·cosine 게이트 캘리브레이션·회수 단서어·query intent 규칙·Gemma 프롬프트·주입 지시문이 전부 한국어 기준. 영어 메모리도 저장·색인·검색은 되지만 회수 품질 튜닝은 한국어 대상이며 영어 환경에서는 미측정
 6. **PII 필터는 키 패턴만** — 이메일/전화는 로컬 전용이라 통과
 7. **세션 경계 = JSONL 파일** — 한 파일 안에서 주제 바뀌어도 하나로 간주
 
