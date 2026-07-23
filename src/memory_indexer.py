@@ -44,11 +44,16 @@ EMBED_DIM = 1024
 # (off 모드 회귀 0). 비용은 전부 index-time — 회수 query-time 0ms 증가.
 CR_MODES = ("off", "title", "synopsis")
 CR_MODE = os.environ.get("MV3_CR_MODE", "off")  # index-time 기본 off
-SYNOPSIS_PROMPT_VERSION = 2
+SYNOPSIS_PROMPT_VERSION = 1
 WRAPPER_VERSION = 1
 CR_EMBED_MODEL_TAG = "arctic-ko-v2"  # corpus_generation 해시 입력(임베딩 모델 식별)
 CTX_SYNOPSIS_CAP = 300  # synopsis/description 맥락 줄 cap(자)
-SYNOPSIS_BACKEND_TAG = "deprecated-title-fallback"
+# synopsis tier 전용 로컬 Gemma(zero-cost — 클라우드 금지). index-time 이라 관대한 timeout.
+# enable_thinking=False 로 reasoning 생략(3~7배 빠름, 품질 동일 — CLAUDE.md gemma 규약).
+GEMMA_SYNOPSIS_URL = "http://localhost:8080/v1/chat/completions"
+GEMMA_SYNOPSIS_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_SYNOPSIS_TIMEOUT = 8.0
+GEMMA_SYNOPSIS_MAX_TOKENS = 120
 # Sprint 9: BGE-M3 → Arctic-Embed-L v2.0 KO 교체. CLS pooling + L2 normalized.
 # 서버가 "kind" 필드를 사용 (query → "query: " prefix 자동 부착).
 # Claude Code 가 cwd 마다 별도 projects 슬롯을 만들기 때문에
@@ -376,22 +381,54 @@ def wrap_body_for_embedding(body: str, prefix: str | None) -> str:
 
 
 def compute_corpus_generation(mode: str) -> str:
-    """16-char 해시 — mode/prompt_ver/backend/wrapper_ver/embed_model 입력 변경
+    """16-char 해시 — mode/prompt_ver/gemma_model/wrapper_ver/embed_model 입력 변경
     감지(stale → 재임베딩 트리거). mtime 만으로 못 잡는 '모드/프롬프트 변경' 재임베딩."""
-    raw = f"{mode}|{SYNOPSIS_PROMPT_VERSION}|{SYNOPSIS_BACKEND_TAG}|{WRAPPER_VERSION}|{CR_EMBED_MODEL_TAG}"
+    raw = f"{mode}|{SYNOPSIS_PROMPT_VERSION}|{GEMMA_SYNOPSIS_MODEL}|{WRAPPER_VERSION}|{CR_EMBED_MODEL_TAG}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def generate_synopsis_gemma(
     name: str, description: str, body: str
 ) -> tuple[str | None, str]:
-    """Legacy compatibility hook.
-
-    The synopsis experiment produced no ranking gain, so it no longer spends an
-    LLM call. Tests and older extensions may still monkeypatch this symbol.
-    """
-    del name, description, body
-    return None, "deprecated_title_fallback"
+    """로컬 Gemma 로 1줄 한국어 synopsis 생성(검색 맥락용). enable_thinking=False.
+    성공 → (synopsis, "ok"); 거부/빈/타임아웃/다운 → (None, reason)."""
+    snippet = (body or "").strip()[:1200]
+    prompt = (
+        "다음 메모리를 검색 인덱싱용으로 한국어 한 문장(15~30단어)으로 요약하라. "
+        "이 메모리가 '무엇에 관한 것인지' 핵심 주제·대상·맥락만 담고, 따옴표·머리말·군더더기 "
+        "없이 문장만 출력하라.\n\n"
+        f"<name>{name}</name>\n<description>{description}</description>\n<body>{snippet}</body>"
+    )
+    payload = json.dumps({
+        "model": GEMMA_SYNOPSIS_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": GEMMA_SYNOPSIS_MAX_TOKENS,
+        "temperature": 0.2,
+        "enable_thinking": False,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        GEMMA_SYNOPSIS_URL, data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=GEMMA_SYNOPSIS_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+    except (urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError, OSError, TimeoutError) as e:
+        _debug(f"cr synopsis gemma fail: {type(e).__name__}: {e}")
+        return None, "gemma_unavailable"
+    choices = data.get("choices") or []
+    if not choices or not isinstance(choices[0], dict):
+        return None, "no_choices"
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return None, "no_message"
+    raw = message.get("content")
+    if raw is not None and not isinstance(raw, str):
+        return None, "nonstr_content"
+    syn = _sanitize_ctx(raw or "", cap=CTX_SYNOPSIS_CAP)
+    if not syn:
+        return None, "empty"
+    return syn, "ok"
 
 
 def compute_contextual_embedding(
@@ -401,7 +438,7 @@ def compute_contextual_embedding(
 
     반환: (embedding_ctx_blob | None, cr_synopsis | None, effective_mode).
     - title : description 을 맥락으로(LLM 0). description 빈약하면 name-only.
-    - synopsis : deprecated; title 로 강등(LLM 호출 없음).
+    - synopsis : 로컬 Gemma 1줄 생성 → 실패 시 title 로 강등(R2).
     - ctx 임베딩 자체 실패(서버 다운 등) → off 로 완전 폴백(인덱싱 무중단, raw 사용).
     """
     if mode == "off" or not body.strip():

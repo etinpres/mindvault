@@ -196,8 +196,8 @@ def test_detect_end_to_end_metric_drift(tmp_path, write_memory, monkeypatch):
         lambda c, m, top_k=5: [(old, 0.85)],
     )
     monkeypatch.setattr(
-        "src.contradiction_detector._classify_pairs",
-        lambda new, old_bodies: {0: {"kind": "metric_update", "reason": "65 → 66.3", "confidence": 0.9}},
+        "src.contradiction_detector._classify_pair",
+        lambda new, old_body: {"kind": "metric_update", "reason": "65 → 66.3", "confidence": 0.9},
     )
 
     candidate = {"slug": "new-metric", "title": "회수율 재측",
@@ -222,8 +222,8 @@ def test_detect_filters_low_confidence(tmp_path, write_memory, monkeypatch):
         lambda c, m, top_k=5: [(old, 0.7)],
     )
     monkeypatch.setattr(
-        "src.contradiction_detector._classify_pairs",
-        lambda new, old_bodies: {0: {"kind": "fact_correction", "reason": "?", "confidence": 0.5}},
+        "src.contradiction_detector._classify_pair",
+        lambda new, old_body: {"kind": "fact_correction", "reason": "?", "confidence": 0.5},
     )
     assert detect_contradictions({"slug": "y", "body": "new", "title": "Y"}, tmp_path) == []
 
@@ -236,14 +236,14 @@ def test_detect_filters_no_conflict(tmp_path, write_memory, monkeypatch):
         lambda c, m, top_k=5: [(old, 0.85)],
     )
     monkeypatch.setattr(
-        "src.contradiction_detector._classify_pairs",
-        lambda new, old_bodies: {0: {"kind": "no_conflict", "reason": "주제 다름", "confidence": 0.95}},
+        "src.contradiction_detector._classify_pair",
+        lambda new, old_body: {"kind": "no_conflict", "reason": "주제 다름", "confidence": 0.95},
     )
     assert detect_contradictions({"slug": "y", "body": "new", "title": "Y"}, tmp_path) == []
 
 
 def test_detect_handles_classify_failure(tmp_path, write_memory, monkeypatch):
-    """Batch classifier returning no row skips the candidate."""
+    """_classify_pair returning None → skip that candidate, don't crash."""
     from src.contradiction_detector import detect_contradictions
     old = write_memory(tmp_path, "x.md", "name: x\ntype: feedback", "old text")
     monkeypatch.setattr(
@@ -251,8 +251,8 @@ def test_detect_handles_classify_failure(tmp_path, write_memory, monkeypatch):
         lambda c, m, top_k=5: [(old, 0.85)],
     )
     monkeypatch.setattr(
-        "src.contradiction_detector._classify_pairs",
-        lambda new, old_bodies: {},
+        "src.contradiction_detector._classify_pair",
+        lambda new, old_body: None,
     )
     assert detect_contradictions({"slug": "y", "body": "new", "title": "Y"}, tmp_path) == []
 
@@ -430,23 +430,65 @@ def test_classify_valid_confidence_preserved(monkeypatch):
     assert result["confidence"] == 0.92
 
 
-def test_legacy_classifier_alias_uses_structured_backend(monkeypatch):
-    import json
-    from src import contradiction_detector
-    import llm_backend
+# --- sweep round2: _call_gemma_for_classify must guard non-dict choices/message ---
+# monkeypatch target: src.contradiction_detector.urllib.request.urlopen
+# (module uses `import urllib.request`, so urlopen is attribute of urllib.request)
 
+class _FakeResp:
+    """Minimal context-manager stub for urlopen returning controlled JSON."""
+
+    def __init__(self, payload):
+        import json as _json
+        self._raw = _json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_call_gemma_handles_nondict_choice(monkeypatch):
+    """choices[0] being a non-dict (str) must return None, not raise AttributeError."""
+    from src import contradiction_detector
     monkeypatch.setattr(
-        llm_backend,
-        "call_codex_contradictions",
-        lambda prompt: [{
-            "index": 0,
-            "kind": "no_conflict",
-            "reason": "양립 가능",
-            "confidence": 0.98,
-        }],
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": ["just a string"]}),
     )
-    raw = contradiction_detector._call_gemma_for_classify("prompt")
-    assert json.loads(raw)["kind"] == "no_conflict"
+    assert contradiction_detector._call_gemma_for_classify("prompt") is None
+
+
+def test_call_gemma_handles_null_choice(monkeypatch):
+    """choices[0] being null must return None, not raise."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": [None]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") is None
+
+
+def test_call_gemma_handles_nondict_message(monkeypatch):
+    """message being a non-dict (str) must return None, not raise."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": [{"message": "not a dict"}]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") is None
+
+
+def test_call_gemma_valid_response_still_works(monkeypatch):
+    """Regression: a normal valid response still returns trimmed content."""
+    from src import contradiction_detector
+    monkeypatch.setattr(
+        contradiction_detector.urllib.request, "urlopen",
+        lambda req, timeout=None: _FakeResp({"choices": [{"message": {"content": "  hello  "}}]}),
+    )
+    assert contradiction_detector._call_gemma_for_classify("prompt") == "hello"
 
 
 # --- _relevant_excerpt (long-body truncation fix) ---

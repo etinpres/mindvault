@@ -7,8 +7,8 @@ USAGE
     python scripts/contradiction_backfill.py --dry-run   # show stats, don't append
     python scripts/contradiction_backfill.py --limit 10  # process first N files
 
-This script calls Luna once per memory with a top-k candidate batch.
-Runtime depends on Codex CLI latency and the memory file count.
+This script calls Gemma ~N*top_k times where N is the memory file count.
+At ~3s per Gemma call, expect ~10 minutes per 200 files.
 
 After running, review the queue:
     python -m src.contradiction_review_cli list

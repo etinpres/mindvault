@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""MindVault v4 — SessionStart 훅. 최근 N개 세션을 Luna로 요약해 주입.
+"""MindVault v3 — SessionStart 훅. 최근 N개 세션을 Claude Code(`claude -p`)로 요약해 컨텍스트에 주입.
 
-Codex subprocess에는 recursion guard를 주입해 nested hook 재귀를 차단한다.
+2026-05-22 변경: Gemma MLX (45초 cache MISS) → `claude -p --model haiku` (10-15초).
+recursion guard 환경변수로 sub-session에서 자기 자신 발동 차단.
 """
 from __future__ import annotations
 
@@ -9,7 +10,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
+import subprocess
 import sys
 import time
 import traceback
@@ -60,14 +63,17 @@ CACHE_DIR = _MV3_DATA_DIR / "cache"
 DEBUG_LOG = _MV3_DATA_DIR / "debug.log"
 SIGNATURE = "# 지난 세션 요약 (MindVault v3)"
 RECURSION_GUARD_ENV = "MV3_HOOK_RECURSION_GUARD"
+CLAUDE_FALLBACK_PATH = os.path.expanduser("~/.nvm/versions/node/v24.13.0/bin/claude")
+CLAUDE_MODEL = "haiku"
+CLAUDE_TIMEOUT = 90  # subprocess cap (startup + plugin sync + model 합쳐서 여유)
 
 MAX_SESSIONS = 5
 MAX_MSG_CHARS = 400
-# legacy aliases — call_gemma signature 호환 위해 유지
+# legacy aliases — call_gemma signature 호환 위해 유지 (max_tokens는 claude -p에서 무시)
 GEMMA_MINI_MAX_TOKENS = 1200
 GEMMA_UNIFIED_MAX_TOKENS = 2500
 CACHE_DAYS = 7
-CACHE_VERSION = "v5-luna"  # provider migration invalidates old summaries
+CACHE_VERSION = "v4-claude-p"  # bump to invalidate Gemma-generated caches
 
 # Per-session turn budget: index 0 = most recent. Earlier sessions get fewer turns.
 TURN_WEIGHTS = [
@@ -239,26 +245,63 @@ def cache_purge_old() -> None:
             continue
 
 
+def _claude_cmd() -> str:
+    """`claude` 실행 경로. PATH 부재 시 nvm 폴백."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    if Path(CLAUDE_FALLBACK_PATH).is_file():
+        return CLAUDE_FALLBACK_PATH
+    return "claude"  # 마지막 폴백 — 실패 시 subprocess가 raise
+
+
 def call_gemma(prompt: str, max_tokens: int = 2000) -> str | None:
-    """Legacy alias: summarize with one structured Codex Luna call."""
-    del max_tokens
+    """Claude Code `claude -p --model haiku` 호출. (legacy 함수명 유지, 호출부 호환)
+
+    sub-session에서 mv2 hook 무한재귀 방지 위해 RECURSION_GUARD_ENV=1 주입.
+    max_tokens는 claude -p에 직접 전달 못 하므로 무시 (length는 system-prompt로 가이드).
+    """
     # 안전망: 이미 sub-hook 안이면 더 깊은 재귀 차단
     if os.environ.get(RECURSION_GUARD_ENV) == "1":
-        _debug("LLM summary skipped — already inside recursion guard")
+        _debug("call_gemma skipped — already inside recursion guard")
         return None
-    scripts_dir = Path(
-        os.environ.get(
-            "MV3_SCRIPTS_DIR", "~/.claude/scripts/mindvault"
-        )
-    ).expanduser()
-    if scripts_dir.is_dir() and str(scripts_dir) not in sys.path:
-        sys.path.insert(0, str(scripts_dir))
+
+    env = os.environ.copy()
+    env[RECURSION_GUARD_ENV] = "1"
+    # nvm bin 경로를 PATH에 추가 (hook 환경 PATH가 빈약할 때 보강)
+    nvm_bin = os.path.expanduser("~/.nvm/versions/node/v24.13.0/bin")
+    env["PATH"] = nvm_bin + ":" + env.get("PATH", "/usr/bin:/bin")
+
     try:
-        from llm_backend import call_codex_text
-        return call_codex_text("session_start_summary", prompt)
-    except Exception as e:
-        _debug(f"luna summary exception: {type(e).__name__}: {e}")
+        result = subprocess.run(
+            [_claude_cmd(), "-p", "--model", CLAUDE_MODEL, prompt],
+            capture_output=True,
+            timeout=CLAUDE_TIMEOUT,
+            env=env,
+            text=True,
+        )
+    except subprocess.TimeoutExpired:
+        _debug(f"claude -p timeout {CLAUDE_TIMEOUT}s")
         return None
+    except FileNotFoundError as e:
+        _debug(f"claude binary not found: {e}")
+        return None
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        # KeyboardInterrupt/SystemExit 는 의도적으로 전파 — 사용자 Ctrl-C 가
+        # SessionStart 90s 매달림으로 swallow 되던 회귀(audit-2026-05-24) 차단.
+        _debug(f"claude -p exception: {type(e).__name__}: {e}")
+        return None
+
+    if result.returncode != 0:
+        _debug(
+            f"claude -p exit {result.returncode}: stderr={result.stderr[:200] if result.stderr else ''!r}"
+        )
+        return None
+    content = (result.stdout or "").strip()
+    if not content:
+        _debug("claude -p empty stdout")
+        return None
+    return content
 
 
 def build_mini_prompt(path: Path, msgs: list[dict], idx: int, total: int) -> str:
@@ -723,7 +766,7 @@ def handle_compact_reinjection(hook_data: dict) -> int:
 
 
 def main() -> int:
-    # 무한 재귀 차단: nested Codex 호출에서 발동된 SessionStart hook은 즉시 skip
+    # 무한 재귀 차단: 자기 자신의 claude -p 안에서 발동된 sub-session의 SessionStart hook은 즉시 skip
     if os.environ.get(RECURSION_GUARD_ENV) == "1":
         # stdin 비우고 silent exit (Claude Code hook 계약: exit 0)
         try:
@@ -751,7 +794,7 @@ def main() -> int:
                 # bug-audit 2026-05-29 (session-hooks-subagent-fire-1): 서브에이전트
                 # SessionStart 는 격리 작업 컨텍스트라 cross-session 메모리 주입이
                 # 불필요한데, 게이팅이 없어 모든 서브에이전트 시작마다 동기 요약
-                # 생성(LLM 호출)이 서브에이전트를 블로킹했다.
+                # 생성(Gemma 호출, 최대 수십 초)이 서브에이전트를 블로킹했다.
                 # agent_type 이 있으면(=서브에이전트) 즉시 정상 종료한다 (메인 세션은
                 # agent_type 미포함이라 영향 없음).
                 if hook_data.get("agent_type"):
@@ -786,7 +829,9 @@ def main() -> int:
             return 0
         _debug(f"cache MISS key={key[:12]}")
 
-        # Single-stage: 5세션 head/tail을 한 번에 prompt에 넣고 Luna 1회 호출.
+        # Single-stage: 5세션 head/tail을 한 번에 prompt에 넣고 claude -p 1회 호출.
+        # 2026-05-22 변경 (이전: 2-stage with 6 calls × ~11s = 66s+, 병렬화 시도해도
+        # NodeJS subprocess contention으로 더 느려짐).
         session_data: list[tuple[Path, list[dict]]] = []
         for idx, p in enumerate(paths):
             head, tail = TURN_WEIGHTS[idx] if idx < len(TURN_WEIGHTS) else (4, 6)

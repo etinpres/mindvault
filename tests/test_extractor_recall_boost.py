@@ -32,7 +32,7 @@ class TestEnvHelpers(unittest.TestCase):
             os.environ.pop("MV3_EXTRACTOR_GEMMA_RETRIES", None)
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _retries
-            self.assertEqual(_retries(), 0)
+            self.assertEqual(_retries(), 2)
 
     def test_retries_override(self):
         with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "5"}):
@@ -44,7 +44,7 @@ class TestEnvHelpers(unittest.TestCase):
         with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "garbage"}):
             sys.modules.pop("memory_extractor", None)
             from memory_extractor import _retries
-            self.assertEqual(_retries(), 0)
+            self.assertEqual(_retries(), 2)
 
     def test_retries_negative_clamped(self):
         with patch.dict(os.environ, {"MV3_EXTRACTOR_GEMMA_RETRIES": "-3"}):

@@ -202,19 +202,34 @@ class TestCache(unittest.TestCase):
 
 
 class TestGemmaClientErrorHandling(unittest.TestCase):
-    """Legacy call name now delegates to the shared Luna backend."""
+    """call_gemma 의 실패 경로 — 함수명은 legacy 지만 내부 구현은 `subprocess.run`
+    으로 `claude -p` CLI 호출. 따라서 mock 대상은 urllib.urlopen 이 아니라
+    `session_memory.subprocess.run`. 이전 stale test 가 잘못된 target 잡아 실제
+    claude CLI 가 호출되며 fail 했던 결함을 본 패치로 해소 (Sprint 11 BUILD-LOG
+    §"미해결" 4번)."""
 
     def test_returns_none_on_timeout(self):
-        with patch("llm_backend.call_codex_text", return_value=None):
+        import subprocess
+        with patch(
+            "session_memory.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=5),
+        ):
             self.assertIsNone(sm.call_gemma("anything"))
 
     def test_returns_none_on_binary_missing(self):
-        with patch("llm_backend.call_codex_text", side_effect=OSError("codex")):
+        """claude CLI 가 없을 때 (FileNotFoundError) 도 graceful None."""
+        with patch(
+            "session_memory.subprocess.run",
+            side_effect=FileNotFoundError("claude"),
+        ):
             self.assertIsNone(sm.call_gemma("anything"))
 
     def test_returns_none_on_nonzero_exit(self):
-        with patch("llm_backend.call_codex_text", return_value="요약"):
-            self.assertEqual(sm.call_gemma("anything"), "요약")
+        """exit code != 0 면 stderr 메시지 무관하게 None."""
+        from types import SimpleNamespace
+        fake = SimpleNamespace(returncode=1, stdout="", stderr="boom")
+        with patch("session_memory.subprocess.run", return_value=fake):
+            self.assertIsNone(sm.call_gemma("anything"))
 
 
 class TestEmitOutput(unittest.TestCase):

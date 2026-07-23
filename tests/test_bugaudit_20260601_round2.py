@@ -34,22 +34,50 @@ def _gemma_payload(content, finish_reason="stop"):
     }).encode()
 
 
-class TestRetiredModelPaths(unittest.TestCase):
-    def test_hot_intent_has_no_llm_fallback(self):
-        import query_intent
-        self.assertFalse(hasattr(query_intent, "classify_with_gemma"))
+class TestExtractorTruncationAndNonStr(unittest.TestCase):
+    def test_finish_reason_length_returns_none(self):
+        import memory_extractor as me
+        payload = _gemma_payload('[{"type":"project","title":"T"', finish_reason="length")
+        with patch.object(me.urllib.request, "urlopen", return_value=_Resp(payload)):
+            self.assertIsNone(me.call_gemma("p"))
 
-    def test_async_clients_delegate_to_shared_backend(self):
-        import alias_generator
-        import memory_extractor
-        import llm_backend
-        with patch.object(
-            llm_backend, "call_codex_extractor", return_value="[]"
-        ), patch.object(
-            llm_backend, "call_codex_aliases", return_value=["별칭"]
-        ):
-            self.assertEqual(memory_extractor.call_gemma("p"), "[]")
-            self.assertEqual(alias_generator._call_gemma("d", "b"), ["별칭"])
+    def test_nonstr_content_returns_none(self):
+        import memory_extractor as me
+        payload = _gemma_payload([{"type": "text", "text": "x"}])
+        with patch.object(me.urllib.request, "urlopen", return_value=_Resp(payload)):
+            self.assertIsNone(me.call_gemma("p"))
+
+    def test_normal_content_still_works(self):
+        import memory_extractor as me
+        payload = _gemma_payload("[]", finish_reason="stop")
+        with patch.object(me.urllib.request, "urlopen", return_value=_Resp(payload)):
+            self.assertEqual(me.call_gemma("p"), "[]")
+
+
+class TestAliasNonStrContent(unittest.TestCase):
+    def test_list_content_no_crash(self):
+        import alias_generator as ag
+        payload = _gemma_payload([{"type": "text", "text": "alias1\nalias2"}])
+        with patch.object(ag.urllib.request, "urlopen", return_value=_Resp(payload)):
+            self.assertEqual(ag._call_gemma("desc", "body"), [])
+
+
+class TestIntentTransientNegCache(unittest.TestCase):
+    def test_transient_failure_not_negative_cached(self):
+        import query_intent as qi
+        with patch.object(qi, "_gemma_cache_get", return_value=None), \
+             patch.object(qi, "_call_gemma_intent", return_value=None), \
+             patch.object(qi, "_gemma_cache_put") as put:
+            self.assertIsNone(qi.classify_with_gemma("이거 뭐 처리해줘 적당히"))
+            put.assert_not_called()
+
+    def test_genuine_other_is_negative_cached(self):
+        import query_intent as qi
+        with patch.object(qi, "_gemma_cache_get", return_value=None), \
+             patch.object(qi, "_call_gemma_intent", return_value="other"), \
+             patch.object(qi, "_gemma_cache_put") as put:
+            self.assertIsNone(qi.classify_with_gemma("이거 뭐 처리해줘 적당히"))
+            put.assert_called_once()
 
 
 class TestReverifyNonDictSidecar(unittest.TestCase):
@@ -126,11 +154,13 @@ class TestSessionVecStaleOnUpdate(unittest.TestCase):
 
 
 
-class TestSearchSharedBackend(unittest.TestCase):
-    def test_legacy_alias_is_graceful(self):
+class TestSearchCallGemmaNonStr(unittest.TestCase):
+    """#R3: search.call_gemma 도 non-str content 가드(다른 Gemma 호출자와 parity)."""
+
+    def test_list_content_returns_none(self):
         import search
-        import llm_backend
-        with patch.object(llm_backend, "call_codex_text", return_value=None):
+        payload = _gemma_payload([{"type": "text", "text": "x"}])
+        with patch.object(search.urllib.request, "urlopen", return_value=_Resp(payload)):
             self.assertIsNone(search.call_gemma("prompt"))
 
 

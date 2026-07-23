@@ -4,7 +4,7 @@
 Sprint 5 변경:
 - FTS5 단독 → FTS5 + Arctic-ko vec hybrid (RRF 결합).
 - raw cosine 절대 게이트 (DEFAULT_RAW_COSINE_MIN) 도입 → V1 토큰 낭비 패턴 회피.
-- Luna 1회가 게이트 통과 candidates의 rerank+요약을 함께 수행.
+- Gemma rerank/summarize는 게이트 통과 candidates에만 적용 (Gemma 호출량 절감).
 - 회수 단서어 감지 시 게이트 완화 (RAW_COSINE_MIN_RELAXED).
 
 memory_search.py와 같은 게이트 철학:
@@ -12,12 +12,15 @@ memory_search.py와 같은 게이트 철학:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
 import sys
 import time
 import traceback
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import numpy as np
@@ -28,6 +31,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expanduser()
 DB_PATH = DATA_DIR / "index.db"
 DEBUG_LOG = DATA_DIR / "debug.log"
+GEMMA_URL = "http://localhost:8080/v1/chat/completions"
+GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_TIMEOUT = 45
+
 RRF_K = 60
 EMBED_DIM = 1024
 FTS_LIMIT = 10
@@ -79,13 +86,41 @@ def fts_escape(query: str) -> str:
 
 
 def call_gemma(prompt: str, max_tokens: int = 1500) -> str | None:
-    """Legacy test/API alias. Uses Luna; no local model endpoint."""
-    del max_tokens
+    body = json.dumps(
+        {
+            "model": GEMMA_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.3,
+            # mem-fan-fix 2026-06-19: thinking ON 시 reasoning 토큰 생성으로 KV/activation
+            # peak 폭증(gemma 서버 peak 22GB 관측). 단순 변환이라 off 가 품질 동일·3~7배 빠름.
+            # 12B 는 top-level 키만 먹힘(chat_template_kwargs 무효 — CLAUDE.md gemma 규약).
+            "enable_thinking": False,
+        }
+    ).encode()
+    req = urllib.request.Request(
+        GEMMA_URL,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
-        from llm_backend import call_codex_text
-        return call_codex_text("session_search_legacy", prompt)
-    except Exception as e:
-        _debug(f"luna fail: {type(e).__name__} {e}")
+        with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+        choices = data.get("choices") or []
+        if not choices:
+            return None
+        # bug-audit 2026-06-01 (gemma-nonstr-content sibling): content-block 리스트 등
+        # 비-문자열 content 에 .strip() → AttributeError 가 recall() 의 broad except 에
+        # 'recall FATAL' 로 잡혀 sessions 회수가 통째로 0건이 된다(rerank/summary graceful
+        # degrade 무력화). str 만 통과 — contradiction_detector/memory_extractor 등과 parity.
+        raw = (choices[0].get("message") or {}).get("content")
+        content = (raw if isinstance(raw, str) else "").strip()
+        return content or None
+    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, OSError, ValueError) as e:
+        # audit-2026-05-24: BaseException(KeyboardInterrupt/_Timeout) 은
+        # 의도적으로 전파.
+        _debug(f"gemma fail: {type(e).__name__} {e}")
         return None
 
 
@@ -295,72 +330,8 @@ def gemma_summarize(body: str, query: str, max_chars: int = 400) -> str | None:
     return out.strip()[: max_chars * 2]
 
 
-def luna_enrich(
-    query: str,
-    candidates: list[dict],
-    bodies: list[str],
-    k: int = 3,
-    max_chars: int = 400,
-) -> list[dict]:
-    """Rerank and summarize all candidates with one structured Luna call."""
-    if not candidates:
-        return []
-    blocks: list[str] = []
-    for index, (candidate, body) in enumerate(zip(candidates, bodies)):
-        sid = (candidate.get("session_id") or "")[:8]
-        ts = (candidate.get("first_ts") or "")[:16]
-        snippet = candidate.get("snip") or body[:500] or "(내용 없음)"
-        blocks.append(
-            f"[{index}] session={sid} ts={ts}\n"
-            f"snippet={snippet[:800]}\n"
-            f"body={body[:5000]}"
-        )
-    prompt = (
-        f"사용자 질의 {query!r}에 가장 관련 높은 과거 세션을 최대 {k}개 고르세요.\n"
-        f"각 결과에 원래 index와, 세션에 실제 언급된 내용만 사용한 한국어 "
-        f"{max_chars}자 이내 요약을 넣으세요. 추측하지 말고 관련도 순으로 출력하세요.\n\n"
-        + "\n\n".join(blocks)
-    )
-    try:
-        from llm_backend import call_codex_search
-        rows = call_codex_search(prompt)
-    except Exception as exc:
-        _debug(f"luna enrich fail: {type(exc).__name__}: {exc}")
-        rows = []
-
-    out: list[dict] = []
-    seen: set[int] = set()
-    for row in rows:
-        index = row.get("index")
-        summary = row.get("summary")
-        if (
-            not isinstance(index, int)
-            or isinstance(index, bool)
-            or not (0 <= index < len(candidates))
-            or index in seen
-        ):
-            continue
-        seen.add(index)
-        out.append({
-            "index": index,
-            "summary": (
-                summary.strip()[: max_chars * 2]
-                if isinstance(summary, str) and summary.strip()
-                else None
-            ),
-        })
-        if len(out) == k:
-            break
-    if out:
-        return out
-    return [
-        {"index": index, "summary": None}
-        for index in range(min(k, len(candidates)))
-    ]
-
-
 def recall(query: str, top_k: int = 3) -> list[dict]:
-    """FTS + vec → RRF → raw cosine gate → one Luna rerank/summary.
+    """Sprint 5 hybrid 검색. FTS + vec → RRF → raw cosine 게이트 → Gemma rerank/요약.
 
     raw cosine 게이트: vec-only hit + raw < min → 차단. fts hit은 면제.
     회수 단서어(예전에, 그때 등) 감지 시 게이트 완화.
@@ -414,27 +385,21 @@ def recall(query: str, top_k: int = 3) -> list[dict]:
             return []
 
         kept_candidates = [info[sid]["cand"] for sid in kept_sids]
-        bodies = [
-            fetch_body(conn, candidate["session_id"])
-            for candidate in kept_candidates
-        ]
-        enriched = luna_enrich(
-            query, kept_candidates, bodies, k=top_k
-        )
+        picked = gemma_rerank(query, kept_candidates, k=top_k)
 
         results = []
-        for item in enriched:
-            i = item["index"]
+        for i in picked:
             c = kept_candidates[i]
             sid = c["session_id"]
-            body = bodies[i]
+            body = fetch_body(conn, sid)
+            summary = gemma_summarize(body, query) if body else None
             results.append(
                 {
                     "session_id": sid,
                     "first_ts": c.get("first_ts") or "",
                     "last_ts": c.get("last_ts") or "",
                     "turn_count": c.get("turn_count") or 0,
-                    "summary": item.get("summary"),
+                    "summary": summary,
                     "raw_snippet": c.get("snip") or (body[:200] if body else ""),
                 }
             )

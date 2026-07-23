@@ -203,12 +203,29 @@ class TestDeploySkill(unittest.TestCase):
         self.assertFalse(self.bak.exists())
 
 
-class TestGemmaRetired(unittest.TestCase):
-    def test_local_model_assets_are_not_shipped(self):
-        self.assertFalse((REPO_DIR / "scripts" / "gemma_server_runner.sh").exists())
-        self.assertFalse(
-            (REPO_DIR / "plist" / "com.mindvault.gemma-mlx.plist").exists()
+class TestGemmaRunner(unittest.TestCase):
+    """scripts/gemma_server_runner.sh 가 mlx_lm.server 호출하는 명령 형식 검증."""
+
+    RUNNER = REPO_DIR / "scripts" / "gemma_server_runner.sh"
+
+    def test_dry_run_prints_expected_command(self):
+        """MV3_RUNNER_DRY_RUN=1 시 실제 실행 안 하고 명령 echo."""
+        env = os.environ.copy()
+        env["MV3_RUNNER_DRY_RUN"] = "1"
+        r = subprocess.run(
+            ["bash", str(self.RUNNER)],
+            capture_output=True, env=env,
         )
+        self.assertEqual(r.returncode, 0)
+        out = r.stdout.decode()
+        self.assertIn("mlx_lm.server", out)
+        self.assertIn("mlx-community/gemma-4-e4b-it-4bit", out)
+        self.assertIn("127.0.0.1", out)
+        self.assertIn("8080", out)
+
+    def test_runner_exists_and_executable(self):
+        self.assertTrue(self.RUNNER.exists())
+        self.assertTrue(os.access(self.RUNNER, os.X_OK))
 
 
 class TestSprint45ArcticKoConvert(unittest.TestCase):
@@ -274,6 +291,69 @@ class TestSprint45ArcticKoConvert(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         steps = self.step_file.read_text().splitlines()
         self.assertNotIn("converted", steps)
+
+
+class TestSprint17GemmaInstall(unittest.TestCase):
+    """Sprint 17 — Gemma plist + cache 설치 + 기존 서비스 충돌 감지."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cache_dir = Path(self.tmp.name) / "mv3-gemma"
+        self.step_file = self.cache_dir / ".mv3-step"
+        self.launch_agents = Path(self.tmp.name) / "LaunchAgents"
+        self.launch_agents.mkdir()
+        self.scripts_dir = Path(self.tmp.name) / "mindvault-scripts"
+        self.scripts_dir.mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run_sprint17(self, env_extra=None):
+        env = os.environ.copy()
+        env.update({
+            "ARCH_OVERRIDE": "arm64",
+            "MV3_SPRINT17_ONLY": "1",
+            "MV3_GEMMA_CACHE": str(self.cache_dir),
+            "MV3_GEMMA_STEP_FILE": str(self.step_file),
+            "MV3_LAUNCH_AGENTS": str(self.launch_agents),
+            "MV3_SCRIPTS_DIR": str(self.scripts_dir),
+            "MV3_GEMMA_DRY_RUN": "1",
+            "MV3_EXISTING_GEMMA": "",
+        })
+        if env_extra:
+            env.update(env_extra)
+        return subprocess.run(
+            ["bash", str(INSTALL_SH)],
+            capture_output=True, env=env,
+        )
+
+    def test_clean_install_creates_plist_and_steps(self):
+        r = self._run_sprint17()
+        self.assertEqual(r.returncode, 0, msg=r.stderr.decode())
+        self.assertTrue((self.launch_agents / "com.mindvault.gemma-mlx.plist").exists())
+        self.assertTrue((self.scripts_dir / "gemma_server_runner.sh").exists())
+        steps = self.step_file.read_text().splitlines()
+        for s in ("deps-ok", "downloaded", "plist-loaded", "healthy"):
+            self.assertIn(s, steps)
+
+    def test_existing_gemma_service_skips_plist(self):
+        r = self._run_sprint17(env_extra={"MV3_EXISTING_GEMMA": "com.yonghaekim.gemma-mlx"})
+        self.assertEqual(r.returncode, 0)
+        out = r.stdout.decode()
+        self.assertIn("기존 Gemma launchd 서비스 감지됨", out)
+        self.assertIn("com.yonghaekim.gemma-mlx", out)
+        self.assertFalse((self.launch_agents / "com.mindvault.gemma-mlx.plist").exists())
+
+    def test_resume_from_plist_loaded(self):
+        self.step_file.parent.mkdir(parents=True, exist_ok=True)
+        self.step_file.write_text("deps-ok\ndownloaded\nplist-loaded\n")
+        (self.launch_agents / "com.mindvault.gemma-mlx.plist").write_text("<existing/>")
+        r = self._run_sprint17()
+        self.assertEqual(r.returncode, 0)
+        out = r.stdout.decode()
+        self.assertGreaterEqual(out.count("already done"), 3)
+        steps = self.step_file.read_text().splitlines()
+        self.assertIn("healthy", steps)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 > Claude Code·Codex의 공유 영구 기억 시스템. 5-layer 파이프라인으로 세션 요약 자동 주입 · 자연어 검색 · Memory Compiler · 자동 회수 · 모순 감지까지 — 두 에이전트가 같은 기억을 회수·추출·저장·계측한다.
 
-**v4.1.0** · **Luna 단일 LLM 백엔드** — Claude Code+Codex가 같은 MindVault를 전 생명주기(회수·추출·저장·계측)로 공유하고, 비동기 판단 작업은 `gpt-5.6-luna` low 한 곳으로 통합. 로컬에는 FTS5와 Arctic-ko 임베딩만 유지하며 Gemma 서버·모델은 더 이상 설치하거나 사용하지 않음 · macOS (Apple Silicon) · MIT license · 953 passed + 41 subtests
+**v4.0.0** · **멀티에이전트 공유 기억** — Claude Code+Codex가 같은 MindVault를 전 생명주기(회수·추출·저장·계측)로 공유. Codex `UserPromptSubmit` 자동 회수(어댑터 없는 직결) + turn-scope `Stop` 자동 추출(rollout 로더, `(session,turn)` 멱등키) + close-session 저장 규약 + install.sh Codex 자동 통합(감지 시 hook·스킬·AGENTS 규약 배포) · `agent` 태깅 계측(claude/codex/unknown) · 교차 검수 왕복(Codex 검수 5결함 수정 수렴, 실운영 E2E 실증) · 이전: v3.10.0 Codex 회수 연결 · macOS (Apple Silicon) · MIT license · 972 passed + 41 subtests
 
 ---
 
@@ -17,8 +17,8 @@ https://github.com/etinpres/mindvault 저장소의 README를 읽고 MindVault를
 1. 먼저 내 환경을 확인해줘 — macOS Apple Silicon(arm64)인지, Python 3.10 이상인지,
    Claude Code가 설치돼 있는지. 지원 안 되는 환경(Intel Mac/Linux/Windows)이면
    설치를 시작하지 말고 이유를 알려줘.
-2. 지원 환경이면 저장소를 clone 하고 ./install.sh 를 실행해줘. 첫 실행은 임베딩 모델
-   다운로드와 변환 때문에 몇 분 걸릴 수 있고, 중간에 실패해도
+2. 지원 환경이면 저장소를 clone 하고 ./install.sh 를 실행해줘. 첫 실행은 로컬 모델
+   다운로드(Gemma ~3GB + 임베딩 모델) 때문에 8~12분 걸리고, 중간에 실패해도
    재실행하면 이어서 진행되니 그대로 다시 돌려줘.
 3. 설치가 ~/.claude/settings.json 의 hook 배열을 수정한다는 점(자동 .bak 백업됨)을
    미리 알려주고 진행해줘. Codex(~/.codex)가 있으면 Codex 연동도 자동 설치되는데,
@@ -38,13 +38,11 @@ MindVault는 그 망각의 빈 자리를 네 축으로 메웁니다:
 
 1. **세션 검색** — 모든 과거 .jsonl 로그를 SQLite FTS5 + 임베딩으로 인덱싱, `/recall` 자연어 검색
 2. **메모리 회수** — UserPromptSubmit 마다 hybrid 검색으로 관련 메모리를 system-reminder에 자동 주입
-3. **자동 컴파일** — SessionEnd/Stop마다 Luna low가 새 대화 구간에서 영구로 남길 가치가 있는 결정/노하우/사실을 추출, 검토 후 영구 메모리에 진입
-4. **모순 감지 (v3.4+)** — 신규 메모리가 기존과 충돌 (metric 갱신·결정 반전·사실 정정) 시 Luna가 후보를 한 번에 4-way 분류, 검토 후 신규가 옛 항목 deprecate / 본문 update / dismiss
+3. **자동 컴파일** — SessionEnd/Stop마다 로컬 Gemma가 새 대화 구간에서 영구로 남길 가치가 있는 결정/노하우/사실을 추출, 검토 후 영구 메모리에 진입
+4. **모순 감지 (v3.4+)** — 신규 메모리가 기존과 충돌 (metric 갱신·결정 반전·사실 정정) 시 Gemma 4-way 분류로 검출, 검토 후 신규가 옛 항목 deprecate / 본문 update / dismiss
 
-FTS5와 Arctic-ko 임베딩, hot-path intent 분류는 로컬에서 동작한다. 비동기 LLM
-작업은 Codex CLI의 `gpt-5.6-luna`를 사용하므로 redact된 입력이 Codex 서비스로
-전송된다. 민감정보 치환 마커가 남은 건은 전송하지 않고 건너뛴다.
-`MV3_PRIVACY=local`은 클라우드 추출을 비활성화하며 로컬 LLM으로 폴백하지 않는다.
+Gemma 생성형 작업과 Arctic-ko 임베딩은 모두 로컬에서 동작한다. Codex CLI가
+설치돼 있다는 이유만으로 Luna를 호출하거나 구독 한도를 사용하지 않는다.
 
 ## 왜 이렇게 만들었나 (Karpathy LLM-as-Compiler)
 
@@ -57,7 +55,7 @@ FTS5와 Arctic-ko 임베딩, hot-path intent 분류는 로컬에서 동작한다
   ↑ 매번 비용. 매번 같은 노이즈. 매번 같은 추론.
 
 # LLM-as-Compiler 패턴 (MindVault)
-세션 끝 → Luna가 새 구간만 한 번 정제 → 작은 .md로 저장 → 다음부턴 정제본만 조회
+세션 끝 → Gemma가 새 구간만 한 번 정제 → 작은 .md로 저장 → 다음부턴 정제본만 조회
   ↑ 한 번 비용. 추출 후엔 깨끗한 신호. 누적되며 자기 강화.
 ```
 
@@ -68,27 +66,27 @@ FTS5와 Arctic-ko 임베딩, hot-path intent 분류는 로컬에서 동작한다
 | **Session** | Claude Code 한 번의 대화 단위. `~/.claude/projects/*/<uuid>.jsonl` 한 파일이 한 세션. |
 | **Memory** | 다음 세션에도 쓸 가치가 있는 사실/결정/노하우. `memory/<kebab-name>.md` 한 파일이 한 메모리. |
 | **Recall** | UserPromptSubmit 시 hybrid 검색으로 관련 메모리를 자동 회수해 `system-reminder`로 주입. |
-| **Compile** | SessionEnd/Stop 시 Luna low가 cursor 이후 delta만 읽고 새 메모리 후보를 `_procedural/_staged/` 에 자동 추출. |
+| **Compile** | SessionEnd/Stop 시 Gemma가 cursor 이후 delta만 읽고 새 메모리 후보를 `_procedural/_staged/` 에 자동 추출. |
 
 ## 5-Layer 아키텍처
 
 | Layer | 책임 |
 |---|---|
-| **L1 — SessionStart 자동 주입** | 최근 5 세션을 Luna low로 요약해 새 세션에 자동 주입. 캐시 히트 ~50ms. **compaction 직후(`source=compact`)엔 요약 대신 현재 세션 관련 메모리만 경량 재주입 (v3.5+)** — 압축으로 사라진 회수 맥락 복원 |
-| **L2 — `/recall` 자연어 검색** | JSONL FTS5 후보를 한 번의 Luna 호출로 재순위·요약 (sessions), Arctic-ko 임베딩 + FTS5 hybrid RRF (memory) |
-| **L3 — Memory Compiler** | SessionEnd/Stop → Luna low 정제 → `memory/_procedural/_staged/` → `/memory_review` 승인 후 영구 진입 |
+| **L1 — SessionStart 자동 주입** | 최근 5 세션을 Gemma로 요약해 새 세션에 자동 주입. 캐시 히트 ~50ms. **compaction 직후(`source=compact`)엔 요약 대신 현재 세션 관련 메모리만 경량 재주입 (v3.5+)** — 압축으로 사라진 회수 맥락 복원 |
+| **L2 — `/recall` 자연어 검색** | JSONL FTS5 + Gemma 재순위 (sessions), Arctic-ko 임베딩 + FTS5 hybrid RRF (memory) |
+| **L3 — Memory Compiler** | SessionEnd/Stop → Gemma 정제 → `memory/_procedural/_staged/` → `/memory_review` 승인 후 영구 진입 |
 | **L4 — UserPromptSubmit hook** | 매 메시지 hybrid 검색 → 관련 메모리 system-reminder 주입. raw cosine 게이트 + query intent classifier가 잡담 차단 (false positive 0%) |
-| **L5 — Contradiction Detection (v3.4+)** | 신규 메모리가 기존과 충돌 시 top-5 후보를 한 번의 Luna 호출로 4-way 분류. `python -m src.contradiction_review_cli` 로 검토 후 신규가 옛 항목 deprecate / 본문 update / dismiss. `deprecated_by` 메모리는 L4 회수 시 raw_cosine + score 둘 다 × 0.3 감쇠 |
+| **L5 — Contradiction Detection (v3.4+)** | 신규 메모리가 기존과 충돌 (metric 갱신·결정 반전·사실 정정) 시 Gemma 4-way 분류로 자동 검출. `python -m src.contradiction_review_cli` 로 검토 후 신규가 옛 항목 deprecate / 본문 update / dismiss. `deprecated_by` 메모리는 L4 회수 시 raw_cosine + score 둘 다 × 0.3 감쇠 |
 
 ## v3 본체 (Sprint 13~16 + NEXT-1~20)
 
 | Sprint | 주제 | 상태 |
 |---|---|---|
 | 13 | Procedural Memory Slot (`memory/_procedural/_staged/`) | ✅ |
-| 14 | Memory Compiler (SessionEnd → LLM 정제 → staged) | ✅ `MV3_AUTO_COMPILE=1` |
+| 14 | Memory Compiler (SessionEnd → Gemma 정제 → staged) | ✅ `MV3_AUTO_COMPILE=1` |
 | 15 | Self-eval Loop (internal effort · false positive · 자기충족 탐지) | ✅ |
 | 16 | Query Intent Classifier + Multi-source 인덱싱 | ✅ |
-| NEXT-1~7 | 자동 trigger · embed match · intent classifier · type-gate · diff color · slug conflict · scan cache | ✅ |
+| NEXT-1~7 | 자동 trigger · embed match · Gemma classifier · type-gate · diff color · slug conflict · scan cache | ✅ |
 | NEXT-8 | PROJECTS_ROOT fix (dogfooding gap 해소, LLM-as-Compiler 첫 실증) | ✅ |
 | NEXT-10~20 | ACK trigger · backfill · always-fire · cache · stats CLI · launchd 영구화 | ✅ |
 
@@ -112,14 +110,14 @@ FTS5와 Arctic-ko 임베딩, hot-path intent 분류는 로컬에서 동작한다
 - ⚠️ **Intel Mac** — `install.sh` 가드가 인프라-only 설치 (`MV3_SKIP_MODELS=1`) 를 옵션으로 제공하지만 MLX 모델은 동작 안 함 → 메모리 회수·Memory Compiler 둘 다 비활성 (FTS5 만)
 - ❌ **Linux / Windows** — 사용 불가 (launchd 의존)
 
-### LLM 백엔드
+### 생성형 LLM
 
-- ✅ **Codex CLI + `gpt-5.6-luna` (low)** — 비동기 LLM 작업의 단일 백엔드
-  - Stop burst를 20초 quiet-period로 합치고, 세션 전체가 아니라 persistent cursor 이후 delta만 전송
-  - `MV3_HOOK_RECURSION_GUARD=1`, ephemeral/read-only/ignore-user-config로 nested hook 재귀 차단
-  - 추출·컴파일·SessionStart 요약·별칭·세션 검색·모순 감지를 작업별 JSON schema로 호출
-  - 검색과 모순 감지는 후보를 각각 한 번에 처리해 호출 수를 제한
-- ❌ **로컬 생성 LLM과 자동 폴백** — 지원하지 않음. Codex CLI 실패·오프라인·한도 초과 시 해당 비동기 작업만 안전하게 건너뜀
+- ✅ **Gemma 4 E4B (`mlx-community/gemma-4-e4b-it-4bit`)** — 공식 기본값이자 지원 모델
+  - **사전 설치 안 된 환경**: `install.sh` 가 자동 다운로드 + launchd 등록 (`com.mindvault.gemma-mlx`, port 8080, ~3GB)
+  - **사전 설치된 환경** (예: `com.<user>.gemma-mlx` 가 이미 port 8080 점유 중): `install.sh` 가 자동 감지 후 재사용 (신규 plist 설치 skip)
+  - Stop burst를 20초 quiet-period로 합치고, 세션 전체가 아니라 persistent cursor 이후 delta만 처리
+- 🧪 **Codex CLI + Luna** — 자동 추출용 실험 어댑터는 포함돼 있지만 기본값이 아니며, 전체 LLM 경로의 공식 지원 백엔드는 아님
+- 🔧 **Claude Code Haiku·기타 LLM** — 개인 fork에서 교체 가능. 아래의 비공식 전환 안내 참고
 
 ### 임베딩 모델
 
@@ -129,8 +127,7 @@ FTS5와 Arctic-ko 임베딩, hot-path intent 분류는 로컬에서 동작한다
 ### 기타
 
 - **Python 3.10+**
-- **Codex CLI** (Luna 작업을 위해)
-- **Claude Code 또는 Codex** (hook 등록을 위해)
+- **Claude Code** (hook 등록을 위해)
 
 ## 설치
 
@@ -147,12 +144,12 @@ cd mindvault
 - `~/.claude/settings.json` 의 hook 배열에 등록 (`.bak` 자동 백업)
 - Arctic-ko launchd 서비스 등록 (사용자별 `$HOME` 자동 치환)
 - **(v3.2.0) Sprint 4.5 — Arctic-ko 4bit 모델 자동 변환** (원본 ~1.1GB DL + ~322MB 4bit 양자화)
+- **(v3.2.0) Sprint 17 — Gemma 자동 설치** (`mlx-lm` pip + 모델 ~3GB DL + launchd `com.mindvault.gemma-mlx`)
 - **(v3.2.0) Apple Silicon 가드** — 비 arm64 환경에서는 인프라만 설치 (모델 자동 설치 skip)
-- **Resumable checkpoint** — 중간 실패 시 Arctic-ko step 파일 (`~/.cache/mlx-arctic-ko/.mv3-step`) 기반으로 재실행 시 이어감
-- 이전 버전의 Gemma launchd 서비스와 배포 runner는 업그레이드 시 자동 정리
+- **(v3.2.0) Resumable checkpoint** — 중간 실패 시 step 파일 (`~/.cache/{mv3-gemma,mlx-arctic-ko}/.mv3-step`) 기반으로 재실행 시 이어감
 - 초기 인덱싱 1회 실행
 
-첫 실행 소요는 Arctic-ko 다운로드·변환 속도에 따라 달라진다. 재실행은 idempotent — 이미 있는 자산은 자동 skip.
+첫 실행 소요: **8~12분** (모델 DL/변환). 재실행은 idempotent — 이미 있는 자산 자동 skip.
 
 설치 확인: 새 `claude` 세션을 열면 system-reminder에 `# 지난 세션 요약 (MindVault v3)` 블록이 나타납니다.
 
@@ -183,11 +180,11 @@ Codex와 Claude Code가 같은 메모리 디렉토리에 쓰는 환경에서는 
 /recall MindVault 마이그레이션 결정
 ```
 
-FTS5 (키워드) + Arctic-ko 임베딩 (의미) 두 결과를 RRF로 결합한다. 세션 후보는 한 번의 Luna 호출로 재순위·요약하며, 관련 세션 + 메모리를 함께 검색한다.
+FTS5 (키워드) + Arctic-ko 임베딩 (의미) 두 결과를 RRF로 결합한 뒤 Gemma가 재순위. 관련 세션 + 메모리 동시 검색.
 
 ### `/memory_review` — staged 메모리 검토
 
-SessionEnd/Stop마다 Luna가 자동 추출한 메모리 후보는 `memory/_procedural/_staged/` 에 임시 저장됩니다. 자동으로 영구 메모리에 들어가지 않습니다 (silent failure 방지).
+SessionEnd/Stop마다 Gemma가 자동 추출한 메모리 후보는 `memory/_procedural/_staged/` 에 임시 저장됩니다. 자동으로 영구 메모리에 들어가지 않습니다 (silent failure 방지).
 
 ```
 /memory_review              # staged 후보 목록 (메인 Claude 가 인터랙티브 처리)
@@ -206,6 +203,47 @@ SessionEnd/Stop마다 Luna가 자동 추출한 메모리 후보는 `memory/_proc
 UserPromptSubmit hook이 매 메시지마다 hybrid 검색을 돌립니다. 관련 메모리는 `<system-reminder>` 태그로 Claude의 컨텍스트에 자동 주입되며, 사용자가 명령을 내릴 필요가 없습니다.
 
 raw cosine 게이트 (Arctic-ko 기준 default 0.32, 회수 단서어 시 0.27 완화 — NEXT-30.1 운영 누적 후 fine-tune) + query intent classifier (chat/meta/code/recall/unknown) 가 잡담 쿼리에서 무관 메모리 끼는 false positive를 차단합니다. 임계값은 `hooks/memory-recall.py` 의 `RAW_COSINE_MIN_*` 상수.
+
+## 다른 LLM으로 바꾸고 싶다면 (비공식)
+
+MindVault의 공식 기본값과 테스트 기준은 로컬 Gemma입니다. Codex CLI의 Luna나
+Claude Code의 Haiku로 교체할 수 있지만, 이는 개인 환경에 맞춘 커스터마이징입니다.
+선택한 모델의 구독 한도·클라우드 전송·호환성·향후 업데이트 유지보수는 사용자가
+판단하고 책임져야 합니다.
+
+현재 `MV3_LLM_PROVIDER=codex_cli`는 **자동 추출 경로만** Luna로 바꾸는 실험 옵션입니다.
+전체 경로(SessionStart 요약·검색 보조·Memory Compiler·별칭·모순 감지)를 교체하려면
+코드 수정과 회귀 테스트가 필요합니다. 직접 수정하지 않아도 아래 요청문을 이 저장소를
+연 Codex 또는 Claude Code에 붙여넣어 작업을 맡길 수 있습니다.
+
+### Codex CLI + Luna로 전환 요청
+
+```text
+이 MindVault checkout은 공식 기본값인 Gemma를 유지하는 공개 저장소야.
+내 로컬 환경에서만 모든 생성형 LLM 호출을 Codex CLI의 Luna low로 바꿔줘.
+memory_extractor, session_memory, search, memory_compiler, alias_generator,
+contradiction_detector의 호출을 빠짐없이 조사하고, JSON schema·timeout·redaction과
+MV3_HOOK_RECURSION_GUARD를 적용해. UserPromptSubmit hot path의 결정론적 검색과
+FTS5·Arctic-ko 임베딩은 바꾸지 마. 별도 로컬 브랜치에서 작업하고 전체 테스트와
+실제 schema smoke test를 통과시킨 뒤 운영 배포해. 내가 명시하지 않으면 upstream에
+push하지 마.
+```
+
+### Claude Code + Haiku로 전환 요청
+
+```text
+이 MindVault checkout은 공식 기본값인 Gemma를 유지하는 공개 저장소야.
+내 로컬 환경에서만 모든 생성형 LLM 호출을 현재 Claude Code CLI에서 사용 가능한
+Haiku 모델로 바꿔줘. 먼저 설치된 CLI의 비대화식 호출법과 모델명을 확인해.
+memory_extractor, session_memory, search, memory_compiler, alias_generator,
+contradiction_detector의 호출을 빠짐없이 조사하고, 구조화 JSON 검증·timeout·redaction과
+재귀 hook 차단을 적용해. UserPromptSubmit hot path의 결정론적 검색과 FTS5·Arctic-ko
+임베딩은 바꾸지 마. 별도 로컬 브랜치에서 작업하고 전체 테스트와 실제 응답 smoke
+test를 통과시킨 뒤 운영 배포해. 내가 명시하지 않으면 upstream에 push하지 마.
+```
+
+변경 전에는 현재 checkout과 `~/.claude/settings.json`을 백업하세요. 대체 모델에서
+발생한 문제를 보고할 때는 공식 Gemma 환경에서도 재현되는지 먼저 확인해야 합니다.
 
 ## 자기-수정 메커니즘
 
@@ -226,6 +264,8 @@ raw cosine 게이트 (Arctic-ko 기준 default 0.32, 회수 단서어 시 0.27 �
 | `MAX_HEAD_TURNS` | 6 | 각 세션 앞쪽 턴 수 |
 | `MAX_TAIL_TURNS` | 6 | 각 세션 뒤쪽 턴 수 |
 | `MAX_MSG_CHARS` | 200 | 각 메시지 최대 글자 |
+| `GEMMA_MAX_TOKENS` | 2000 | Gemma 응답 토큰 한도 |
+| `GEMMA_TIMEOUT` | 45 | Gemma 호출 타임아웃(초) |
 | `CACHE_DAYS` | 7 | 캐시 보존 기간 |
 
 ### 환경 변수
@@ -234,11 +274,11 @@ raw cosine 게이트 (Arctic-ko 기준 default 0.32, 회수 단서어 시 0.27 �
 |---|---|---|
 | `MV3_AUTO_COMPILE` | 0 | SessionEnd Memory Compiler opt-in |
 | `MV3_EXTRACTOR_ALWAYS_FIRE` | 0 | trigger 휴리스틱 없이도 항상 추출 시도 |
-| `MV3_LLM_PROVIDER` | `codex_cli` | 호환용 설정. 다른 provider 값도 Luna 경로로 정규화 |
-| `MV3_LLM_MODEL` | `gpt-5.6-luna` | Codex CLI 기본 모델 |
-| `MV3_LLM_EFFORT` | `low` | Codex CLI reasoning effort |
-| `MV3_LLM_TIMEOUT` | `90` | 작업별 Codex CLI 호출 타임아웃(초) |
-| `MV3_PRIVACY` | (empty) | `local`이면 클라우드 LLM 추출을 비활성화 |
+| `MV3_GEMMA_INTENT` | 0 | Query intent classifier에 Gemma 보강 opt-in |
+| `MV3_LLM_PROVIDER` | `gemma` | 자동 추출 provider. `codex_cli`는 명시적으로 설정한 경우에만 사용 |
+| `MV3_LLM_MODEL` | `gpt-5.6-luna` | 실험적 Codex CLI 추출 어댑터의 모델 |
+| `MV3_LLM_EFFORT` | `low` | 실험적 Codex CLI 추출 어댑터의 reasoning effort |
+| `MV3_PRIVACY` | (empty) | `local`이면 자동 추출을 Gemma로 강제 |
 | `MV3_STOP_DEBOUNCE_SECONDS` | 20 | Stop burst quiet-period 병합 시간 |
 | `MV3_EXTRACTOR_MAX_CHARS` | 16000 | 추출 chunk의 대략적 최대 입력 문자 |
 | `MV3_EXTRA_MEMORY_DIRS` | (empty) | 추가 메모리 디렉토리 (`:` 구분) |
@@ -251,7 +291,7 @@ raw cosine 게이트 (Arctic-ko 기준 default 0.32, 회수 단서어 시 0.27 �
 pytest tests/
 ```
 
-**953 passed, 2 skipped + 41 subtests** (회귀 0, v4.1.0). 단위·통합 테스트는 네트워크 없이 실행하며 Luna CLI 경로는 별도 실환경 schema smoke test로 검증한다.
+**972 passed, 2 skipped + 41 subtests** (회귀 0). 단위·통합 테스트는 네트워크 없이 실행하며 Gemma와 실험적 Codex CLI 호출은 mock으로 검증한다.
 
 ## 제거
 
@@ -262,8 +302,9 @@ pytest tests/
 훅 등록 + 스크립트 + 스킬 + launchd 서비스 일괄 제거:
 
 - 선택 설치한 Codex `UserPromptSubmit` MindVault 회수 훅
+- `com.mindvault.gemma-mlx` (v3.2.0+ Gemma)
 - `com.mindvault.arctic-ko-mlx` (v3.2.3+ Arctic-ko)
-- legacy: `com.mindvault.gemma-mlx`, `com.yonghaekim.{gemma-mlx,gemma-mlx-daily-restart,arctic-ko-mlx,bge-m3-mlx,mv3-env,mv3-gemma-intent,mv3-stats-daily}` (옛 설치자 호환 cleanup)
+- legacy: `com.yonghaekim.{arctic-ko-mlx,bge-m3-mlx,mv3-env,mv3-gemma-intent,mv3-stats-daily}` (옛 설치자 호환 cleanup)
 
 Settings backup 은 `~/.claude/settings.json.bak` 으로 자동 저장. `install.sh` 가 사용자 personal `~/.claude/skills/{close-session,cs}/` 를 attic 으로 displace 했었다면 `uninstall.sh` 가 manifest 보고 자동 복원합니다 (v3.2.3 #15).
 
@@ -275,12 +316,13 @@ rm -rf ~/.cache/mlx-arctic-ko
 
 ## 알려진 한계
 
-1. **Apple Silicon Mac 전용** — Intel Mac / Linux / Windows 사용 불가. Arctic-ko용 MLX와 launchd가 macOS Apple Silicon에 의존한다.
-2. **비동기 LLM 작업은 Codex CLI의 Luna low에 의존** — CLI가 없거나 오프라인·한도 초과이면 해당 작업을 건너뛰며 로컬 LLM 폴백은 없다.
+1. **Apple Silicon Mac 전용** — Intel Mac / Linux / Windows 사용 불가. MLX (`mlx-lm`, `mlx-embeddings`) 가 Apple Silicon 만 지원하고 launchd 도 macOS 전용.
+2. **공식 생성형 LLM은 로컬 Gemma 4 E4B** — Codex나 Claude Code가 설치돼 있어도 자동으로 클라우드 모델을 사용하지 않는다.
 3. **임베딩은 Arctic-ko (`dragonkue/snowflake-arctic-embed-l-v2.0-ko`, MLX 4bit) 만 지원** — 다른 임베딩 모델 사용 불가.
-4. **한국어 특화 (Korean-first)** — 임베딩 모델(Arctic-ko 한국어 파인튜닝)·cosine 게이트 캘리브레이션·회수 단서어·query intent 규칙·LLM 프롬프트·주입 지시문이 전부 한국어 기준. 영어 메모리도 저장·색인·검색은 되지만 회수 품질 튜닝은 한국어 대상이며 영어 환경에서는 미측정
-5. **클라우드 전송 필터는 키 패턴 중심** — API 키·토큰은 redact하며 치환 마커가 남은 입력은 전송하지 않는다. 이메일·전화 같은 일반 PII는 별도 필터가 없다. 민감 세션은 `MV3_PRIVACY=local`로 LLM 추출을 끈다.
-6. **세션 경계 = JSONL 파일** — 한 파일 안에서 주제 바뀌어도 하나로 간주
+4. **Gemma 4 E4B는 reasoning 모델** — 내부 사고에 토큰 많이 소비, `GEMMA_MAX_TOKENS` 크게 잡아야 함
+5. **한국어 특화 (Korean-first)** — 임베딩 모델(Arctic-ko 한국어 파인튜닝)·cosine 게이트 캘리브레이션·회수 단서어·query intent 규칙·Gemma 프롬프트·주입 지시문이 전부 한국어 기준. 영어 메모리도 저장·색인·검색은 되지만 회수 품질 튜닝은 한국어 대상이며 영어 환경에서는 미측정
+6. **비공식 클라우드 LLM 전환은 사용자 책임** — 기존 redaction은 API 키·토큰 중심이며 이메일·전화 같은 일반 PII는 별도 필터가 없다.
+7. **세션 경계 = JSONL 파일** — 한 파일 안에서 주제 바뀌어도 하나로 간주
 
 ## 디버깅
 
@@ -325,6 +367,6 @@ MIT — 자세한 내용은 [LICENSE](LICENSE) 참조 (또는 별도 LICENSE 파
 
 이 프로젝트는 [Andrej Karpathy의 LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 의 LLM-as-Compiler 패턴을 Claude Code 환경에서 실증한 결과입니다.
 
-이전에 같은 저자가 만든 [etinpres/mindvault](https://github.com/etinpres/mindvault) (deprecated) 는 이 패턴을 잘못 이해한 채 진행한 첫 시도였습니다. v3 이후는 그 postmortem 교훈을 반영해 LLM이 실제로 메모리를 정제·합성하는 구조로 재설계했습니다.
+이전에 같은 저자가 만든 [etinpres/mindvault](https://github.com/etinpres/mindvault) (deprecated) 는 이 패턴을 잘못 이해한 채 진행한 첫 시도였습니다. v3는 그 postmortem 교훈을 반영한 재시도입니다 — Gemma가 실제로 메모리를 정제·합성하는 구조로.
 
 이슈와 PR을 환영합니다. macOS 외 플랫폼 포팅에 관심 있다면 환영합니다.

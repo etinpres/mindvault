@@ -1,6 +1,6 @@
 #!/bin/bash
 # MindVault v3 — SessionEnd 비동기 래퍼.
-# 원본 session-memory-end.py가 LLM을 동기 호출해 exit를 블로킹하므로 detach로 해결.
+# 원본 session-memory-end.py가 Gemma를 동기 호출하여 exit 30s+ 블로킹 → detach로 해결.
 # 2026-05-22: 무한 재귀 방지 guard 추가 (sub-session에서 즉시 exit).
 # 2026-05-24 (NEXT-19): Claude Code 가 hook subprocess spawn 시 본체 env 만 inherit —
 # shell init 안 거침. plist + .zshenv 로 셸·login 보장해도 hook 본체 env 가 비어있으면
@@ -19,9 +19,11 @@ fi
 # 않고(query_intent 는 recall hot path 전용), 전역 off 결정과 표기 일관 유지.
 export MV3_AUTO_COMPILE=1
 export MV3_EXTRACTOR_ALWAYS_FIRE=1
-export MV3_LLM_PROVIDER=codex_cli
-export MV3_LLM_MODEL=gpt-5.6-luna
-export MV3_LLM_EFFORT=low
+# Public default is the bundled local Gemma runtime. Merely having Codex
+# installed must not consume a user's subscription quota without opt-in.
+export MV3_LLM_PROVIDER="${MV3_LLM_PROVIDER:-gemma}"
+export MV3_LLM_MODEL="${MV3_LLM_MODEL:-gpt-5.6-luna}"
+export MV3_LLM_EFFORT="${MV3_LLM_EFFORT:-low}"
 
 # v4.1: Stop burst를 session별 최신 payload 하나로 병합하고, 20초 quiet period 뒤
 # 전역 single-flight로 추출한다. enqueue는 stdin을 원자 저장한 뒤 즉시 반환하므로

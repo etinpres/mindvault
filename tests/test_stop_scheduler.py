@@ -42,4 +42,5 @@ def test_wrapper_routes_through_scheduler():
         / "session-memory-end-async.sh"
     ).read_text()
     assert "stop_scheduler.py" in wrapper
-    assert "MV3_LLM_PROVIDER=codex_cli" in wrapper
+    assert 'MV3_LLM_PROVIDER="${MV3_LLM_PROVIDER:-gemma}"' in wrapper
+    assert "command -v codex" not in wrapper

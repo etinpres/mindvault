@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MindVault v3 Sprint 3 — SessionEnd 훅.
 
-세션 종료 시 마지막 턴에 '영구 기억' 트리거가 있으면 Luna로 후보 추출 →
+세션 종료 시 마지막 턴에 '영구 기억' 트리거가 있으면 Gemma로 후보 추출 →
 memory/_staged/*.md 로 저장. 실제 memory/ 파일은 절대 건드리지 않는다.
 """
 from __future__ import annotations
@@ -463,7 +463,7 @@ def main() -> int:
             return 0
 
         # Sprint 14: opt-in auto compile — 기존 memory 와 매칭되는 후보는
-        # Luna가 정제해 update_of 메타 부착. env MV3_AUTO_COMPILE=1 일 때만.
+        # Gemma 가 정제해 update_of 메타 부착. env MV3_AUTO_COMPILE=1 일 때만.
         # 정제 실패는 silent — 원본 candidate 그대로 staged 처리.
         try:
             from memory_compiler import auto_compile_enabled, compile_candidates
@@ -506,7 +506,7 @@ def main() -> int:
             _debug(f"index_sync skipped: {type(e).__name__}: {e}")
 
         # NEXT-34 (2026-05-25): alias_index 자동 동기화. SessionEnd 가 이미
-        # nohup detach 컨텍스트라 추가 비용 OK. Luna 호출은 incremental —
+        # nohup detach 컨텍스트라 추가 비용 OK. Gemma 호출은 incremental —
         # 새 메모리 파일이 없으면 거의 즉시 끝. purge_missing 으로 삭제된
         # 메모리 dangling entry 도 함께 청소. 실패는 silent (recall hot
         # path 와 무관, 다음 SessionEnd 에서 재시도 가능).
