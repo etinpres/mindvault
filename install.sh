@@ -238,7 +238,13 @@ END_WRAPPER_TARGET="$HOOKS_DIR/session-memory-end-async.sh"
 # v4 X1-R1: codex_session_loader 는 memory_extractor 가 런타임 import 하는
 # 짝 모듈 — 함께 배포하지 않으면 ModuleNotFoundError → Claude fallback 으로
 # Codex 자동 추출이 조용히 무력화된다 (Codex 검수 High 지적).
-SPRINT3_SRC=("$REPO_DIR/src/memory_extractor.py" "$REPO_DIR/src/memory_review_cli.py" "$REPO_DIR/src/codex_session_loader.py")
+SPRINT3_SRC=(
+  "$REPO_DIR/src/memory_extractor.py"
+  "$REPO_DIR/src/memory_review_cli.py"
+  "$REPO_DIR/src/codex_session_loader.py"
+  "$REPO_DIR/src/llm_backend.py"
+  "$REPO_DIR/src/stop_scheduler.py"
+)
 MEMORY_SKILL_SRC="$REPO_DIR/skill/memory_review.md"
 MEMORY_SKILL_TARGET="$COMMANDS_DIR/memory_review.md"
 

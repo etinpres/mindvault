@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 import session_memory_end as sme
+from memory_extractor import ExtractionResult
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "codex_sessions"
 
@@ -34,14 +35,15 @@ def _stop_payload(transcript, sid="sess-1", turn="turn-1"):
 
 
 @pytest.fixture()
-def run_main(monkeypatch):
+def run_main(monkeypatch, tmp_path):
     calls = []
+    monkeypatch.setattr(sme, "_CODEX_TURNS_SEEN", tmp_path / "turns-seen.jsonl")
 
-    def fake_extract(jsonl_path):
+    def fake_extract(jsonl_path, sid):
         calls.append(Path(jsonl_path))
-        return []  # 후보 0건 → 파이프라인 조기 종료 (staging 없이 경로만 검증)
+        return ExtractionResult([], True)
 
-    monkeypatch.setattr(sme, "extract_from_jsonl", fake_extract)
+    monkeypatch.setattr(sme, "extract_incremental_codex", fake_extract)
 
     def run(payload) -> int:
         monkeypatch.setattr(
@@ -51,6 +53,23 @@ def run_main(monkeypatch):
 
     run.calls = calls
     return run
+
+
+def test_codex_failed_extraction_is_retried(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_extract(jsonl_path, sid):
+        calls.append((Path(jsonl_path), sid))
+        return ExtractionResult([], len(calls) > 1)
+
+    monkeypatch.setattr(sme, "extract_incremental_codex", fake_extract)
+    payload = _stop_payload(
+        str(FIXTURES / "exec.jsonl"), sid="retry-sess", turn="retry-turn"
+    )
+    for _ in range(2):
+        monkeypatch.setattr(sme.sys, "stdin", io.StringIO(json.dumps(payload)))
+        assert sme.main() == 0
+    assert len(calls) == 2
 
 
 def test_codex_stop_routes_transcript(run_main):

@@ -19,18 +19,27 @@ fi
 # 않고(query_intent 는 recall hot path 전용), 전역 off 결정과 표기 일관 유지.
 export MV3_AUTO_COMPILE=1
 export MV3_EXTRACTOR_ALWAYS_FIRE=1
+if command -v codex >/dev/null 2>&1; then
+  export MV3_LLM_PROVIDER=codex_cli
+  export MV3_LLM_MODEL=gpt-5.6-luna
+  export MV3_LLM_EFFORT=low
+else
+  export MV3_LLM_PROVIDER=gemma
+fi
 
+# v4.1: Stop burst를 session별 최신 payload 하나로 병합하고, 20초 quiet period 뒤
+# 전역 single-flight로 추출한다. enqueue는 stdin을 원자 저장한 뒤 즉시 반환하므로
+# Codex hook timeout(2초)을 막지 않는다.
+SCHEDULER="$HOME/.claude/scripts/mindvault/stop_scheduler.py"
+if [ -f "$SCHEDULER" ]; then
+  /usr/bin/env python3 "$SCHEDULER"
+  exit 0
+fi
+
+# 배포 중간 상태의 fail-open fallback.
 TMP_DIR="${TMPDIR:-/tmp}"
 TMP_STDIN=$(mktemp "${TMP_DIR}/mindvault-end-stdin.XXXXXX") || exit 0
-
-find "${TMP_DIR}" -maxdepth 1 -name 'mindvault-end-stdin.*' -type f -mmin +60 -delete 2>/dev/null || true
-
 cat > "$TMP_STDIN" 2>/dev/null || true
-
-# NEXT-23 (2026-05-24): macOS 에 setsid 없음 (`setsid: command not found`) →
-# 옛 wrapper 가 첫 줄에서 fail → async detach 못함 → settings.json 두 번째 hook
-# (session-memory-end.py 직접) 만 fire → Claude Code 종료 시 subprocess SIGTERM →
-# Gemma 호출 도중 죽음. subshell + nohup + disown 으로 macOS 호환 detach.
 (
   trap 'rm -f "$TMP_STDIN"' EXIT
   nohup /usr/bin/env python3 "$HOME/.claude/hooks/session-memory-end.py" < "$TMP_STDIN" >/dev/null 2>&1

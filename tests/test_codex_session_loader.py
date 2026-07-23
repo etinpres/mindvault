@@ -9,7 +9,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from codex_session_loader import is_codex_rollout, load_tail_messages_codex
+from codex_session_loader import (
+    is_codex_rollout,
+    load_incremental_messages_codex,
+    load_tail_messages_codex,
+)
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "codex_sessions"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +76,56 @@ def test_tail_turns_truncation():
         "결과만 다시 알려줘.",
         "2개 테스트가 모두 통과했어요.",
     ]
+
+
+def test_incremental_loader_only_returns_delta_plus_overlap():
+    rollout = FIXTURES / "interactive.jsonl"
+    first = load_incremental_messages_codex(
+        rollout, cursor_offset=0, bootstrap_tail=2
+    )
+    assert first.success is True
+    assert first.has_delta is True
+    assert [m["text"] for m in first.messages] == [
+        "결과만 다시 알려줘.",
+        "2개 테스트가 모두 통과했어요.",
+    ]
+    assert first.end_offset == rollout.stat().st_size
+
+    unchanged = load_incremental_messages_codex(
+        rollout, cursor_offset=first.end_offset, overlap=2
+    )
+    assert unchanged.success is True
+    assert unchanged.has_delta is False
+    assert unchanged.messages == []
+
+
+def test_incremental_loader_append_includes_small_overlap(tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    original = (FIXTURES / "exec.jsonl").read_text()
+    rollout.write_text(original)
+    cursor = rollout.stat().st_size
+    appended = [
+        {"type": "turn_context", "payload": {"turn_id": "t2"}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "앞으로 Luna를 써줘."}]}},
+        {"type": "response_item", "payload": {
+            "type": "message", "role": "assistant", "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "그렇게 할게요."}]}},
+    ]
+    with rollout.open("a") as f:
+        f.write("\n" + "\n".join(json.dumps(d) for d in appended) + "\n")
+
+    delta = load_incremental_messages_codex(
+        rollout, cursor_offset=cursor, overlap=1
+    )
+    assert delta.has_delta is True
+    assert [m["text"] for m in delta.messages] == [
+        "EXEC_OK",
+        "앞으로 Luna를 써줘.",
+        "그렇게 할게요.",
+    ]
+    assert delta.delta_message_count == 2
 
 
 def test_citation_and_reminder_blocks_stripped(tmp_path):

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 # 스펙 "공통 envelope" 의 top-level type 집합. 첫 유효 레코드가 이 형태면
@@ -101,13 +102,26 @@ def _message_text(content) -> str:
     return "\n".join(parts)
 
 
-def load_tail_messages_codex(jsonl_path: Path, tail_turns: int = 40) -> list[dict]:
-    msgs: list[dict] = []
+def _normalized_records(jsonl_path: Path) -> tuple[list[tuple[int, dict]], int] | None:
+    """정규화 메시지와 각 레코드의 종료 byte offset을 반환.
+
+    cursor는 텍스트 줄 번호가 아니라 byte offset을 사용한다. JSONL append 중에도
+    마지막으로 완전히 읽은 지점을 정확히 고정하고, 대화가 길어져도 모델 입력에는
+    cursor 이후 delta만 보낼 수 있다.
+    """
+    records: list[tuple[int, dict]] = []
     seen_turn_context = False
     try:
-        with Path(jsonl_path).open() as f:
-            for line in f:
-                line = line.strip()
+        with Path(jsonl_path).open("rb") as f:
+            while True:
+                raw = f.readline()
+                if not raw:
+                    break
+                end_offset = f.tell()
+                try:
+                    line = raw.decode("utf-8").strip()
+                except UnicodeDecodeError:
+                    continue
                 if not line:
                     continue
                 try:
@@ -142,12 +156,12 @@ def load_tail_messages_codex(jsonl_path: Path, tail_turns: int = 40) -> list[dic
                     text = _STRIP_BLOCK_RE.sub("", text).strip()
                     if not text:
                         continue
-                    msgs.append(
-                        {
+                    records.append(
+                        (end_offset, {
                             "role": role,
                             "text": _redact(text),
                             "bash_commands": [],
-                        }
+                        })
                     )
                 elif pt == "custom_tool_call" and payload.get("name") == "exec":
                     raw = payload.get("input")
@@ -160,15 +174,84 @@ def load_tail_messages_codex(jsonl_path: Path, tail_turns: int = 40) -> list[dic
                         for m in _CMD_LITERAL_RE.findall(raw)
                     ]
                     if cmds:
-                        msgs.append(
-                            {
+                        records.append(
+                            (end_offset, {
                                 "role": "assistant",
                                 "text": "",
                                 "bash_commands": cmds,
-                            }
+                            })
                         )
                 # 그 외 payload type (reasoning, function_call, tool output 등)
                 # 과 top-level compacted/world_state/event_msg 는 적재하지 않음.
+            return records, f.tell()
     except OSError:
+        return None
+
+
+def load_tail_messages_codex(jsonl_path: Path, tail_turns: int = 40) -> list[dict]:
+    loaded = _normalized_records(jsonl_path)
+    if loaded is None:
         return []
-    return msgs[-tail_turns:]
+    records, _ = loaded
+    return [m for _, m in records[-tail_turns:]]
+
+
+@dataclass(frozen=True)
+class IncrementalLoad:
+    messages: list[dict]
+    end_offset: int
+    delta_message_count: int
+    has_delta: bool
+    success: bool
+
+
+def load_incremental_messages_codex(
+    jsonl_path: Path,
+    cursor_offset: int,
+    *,
+    overlap: int = 3,
+    bootstrap_tail: int = 12,
+) -> IncrementalLoad:
+    """cursor 이후 새 메시지와 작은 문맥 overlap만 반환.
+
+    첫 실행(cursor=0)에서 이미 거대한 기존 세션을 만났다면 과거 전체를 재전송하지
+    않고 마지막 ``bootstrap_tail``개만 읽는다. 파일 truncate/교체로 cursor가 현재
+    크기보다 커졌을 때도 같은 bootstrap 경로로 안전하게 복구한다.
+    """
+    loaded = _normalized_records(jsonl_path)
+    if loaded is None:
+        return IncrementalLoad([], 0, 0, False, False)
+    records, end_offset = loaded
+    if not records:
+        return IncrementalLoad([], end_offset, 0, end_offset > cursor_offset, True)
+
+    effective_cursor = cursor_offset
+    if effective_cursor < 0 or effective_cursor > end_offset:
+        effective_cursor = 0
+
+    if effective_cursor == 0:
+        selected = records[-max(1, bootstrap_tail):]
+        return IncrementalLoad(
+            [m for _, m in selected],
+            end_offset,
+            len(selected),
+            end_offset > 0,
+            True,
+        )
+
+    first_delta = next(
+        (idx for idx, (offset, _) in enumerate(records) if offset > effective_cursor),
+        len(records),
+    )
+    if first_delta == len(records):
+        # 레코드가 추가됐지만 대화 메시지가 아닌 bookkeeping record일 수도 있다.
+        # cursor는 전진시켜 같은 tail을 반복 스캔하지 않되 모델은 호출하지 않는다.
+        return IncrementalLoad([], end_offset, 0, end_offset > effective_cursor, True)
+    start = max(0, first_delta - max(0, overlap))
+    return IncrementalLoad(
+        [m for _, m in records[start:]],
+        end_offset,
+        len(records) - first_delta,
+        True,
+        True,
+    )

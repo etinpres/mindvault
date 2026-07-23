@@ -297,6 +297,35 @@ def call_gemma(prompt: str, max_tokens: int = 1500) -> str | None:
         return None
 
 
+def _provider() -> str:
+    """Extraction backend. Production wrapper pins codex_cli; local is fallback."""
+    if os.environ.get("MV3_PRIVACY", "").strip().lower() == "local":
+        return "gemma"
+    return os.environ.get("MV3_LLM_PROVIDER", "gemma").strip().lower()
+
+
+def call_model(prompt: str, max_tokens: int = 1500) -> str | None:
+    """Route one extraction call without silently multiplying paid/cloud calls."""
+    provider = _provider()
+    # A redaction marker means the source contained credentials. Keep that prompt
+    # local even though the literal secret has already been removed.
+    if provider == "gemma" or "[REDACTED_" in prompt or "Bearer [REDACTED]" in prompt:
+        return call_gemma(prompt, max_tokens=max_tokens)
+    if provider != "codex_cli":
+        _debug(f"unknown LLM provider={provider!r}")
+        return None
+    try:
+        from llm_backend import call_codex_extractor
+        out = call_codex_extractor(prompt)
+    except Exception as e:
+        _debug(f"codex-cli backend fail: {type(e).__name__}: {e}")
+        out = None
+    if out is None and os.environ.get("MV3_LLM_FALLBACK", "").strip() == "gemma":
+        _debug("codex-cli unavailable; explicit gemma fallback")
+        return call_gemma(prompt, max_tokens=max_tokens)
+    return out
+
+
 def build_prompt(messages: list[dict]) -> str:
     excerpt_parts = []
     for m in messages:
@@ -310,7 +339,7 @@ def build_prompt(messages: list[dict]) -> str:
             excerpt_parts.append(f"{prefix}:bash: {cmd[:300]}")
     excerpt = "\n".join(excerpt_parts)
     return (
-        "아래는 Claude Code 세션 대화 마지막 부분이다. 사용자가 '영구 기억'으로 남기려고 한 "
+        "아래는 AI 코딩 세션 대화의 새 구간이다. 사용자가 '영구 기억'으로 남기려고 한 "
         "사실만 추출하라. 단순 진행 보고나 일회성 대화는 제외, 단 sprint 진척·결정·"
         "마일스톤 같은 누적 메타데이터는 project 로 적극 추출.\n\n"
         "출력은 JSON 배열만. 각 항목 형식:\n"
@@ -320,6 +349,7 @@ def build_prompt(messages: list[dict]) -> str:
         "- feedback: 사용자의 작업 방식·선호·금지사항 (예: '커밋 분리해라', '머지 직접 금지', "
         "  '자의적 멈춤 권고 금지').\n"
         "- project: 프로젝트의 누적 상태·결정·진척·인물·외부 자원·milestone.\n"
+        "  모델·백엔드·인프라 선택과 운영 기본값 결정도 project.\n"
         "  예: 'X v3.0 ship 2026-05', 'master HEAD abc123 NEXT-N fix 완료', "
         "  'Sprint 14 Memory Compiler 운영 fire 시작', '책임자 Y'.\n"
         "  NEXT-11: 진척 메타데이터도 적극 — 한 sprint 결과·운영 측정 수치·게이트 통과 등은\n"
@@ -504,16 +534,21 @@ def parse_gemma_json(out: str) -> list[dict]:
 
 
 def _retries() -> int:
-    """MV3_EXTRACTOR_GEMMA_RETRIES — Gemma candidate 0건일 때 추가 호출 횟수.
+    """Backend-aware additional attempts.
 
-    NEXT-15 진단: 같은 input 두 번 호출에서 3건 → 0건 (Gemma 비결정성, temp 0.2).
-    retry + union 으로 hit ratio 끌어올림. 본질적으로 LLM stochasticity 흡수책.
-    default 2 = 최초 1회 + 추가 retry 2회 = 최대 3 호출. latency 부담 vs recall trade-off.
+    Luna/Codex is one-shot by default. Gemma keeps the legacy two retries for
+    compatibility and recall. MV3_EXTRACTOR_RETRIES overrides both; the old
+    MV3_EXTRACTOR_GEMMA_RETRIES remains accepted for local deployments.
     """
+    explicit = os.environ.get("MV3_EXTRACTOR_RETRIES")
+    if explicit is None and _provider() == "gemma":
+        explicit = os.environ.get("MV3_EXTRACTOR_GEMMA_RETRIES", "2")
+    if explicit is None:
+        explicit = "0"
     try:
-        return max(0, int(os.environ.get("MV3_EXTRACTOR_GEMMA_RETRIES", "2")))
+        return max(0, int(explicit))
     except ValueError:
-        return 2
+        return 2 if _provider() == "gemma" else 0
 
 
 def _tail_turns() -> int:
@@ -568,17 +603,33 @@ def _load_messages_routed(jsonl_path: Path) -> list[dict]:
     return load_tail_messages(jsonl_path, tail_turns=_tail_turns())
 
 
-def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
+class ExtractionResult:
+    """Small dependency-free status object (also supports dynamic module loads)."""
+
+    __slots__ = ("candidates", "success")
+
+    def __init__(self, candidates: list[dict], success: bool):
+        self.candidates = candidates
+        self.success = success
+
+    def __repr__(self) -> str:
+        return (
+            f"ExtractionResult(candidates={self.candidates!r}, "
+            f"success={self.success!r})"
+        )
+
+
+def _extract_messages(messages: list[dict], source_name: str) -> ExtractionResult:
+    """Extract one bounded message chunk and report transport/parse success."""
     try:
-        msgs = _load_messages_routed(jsonl_path)
-        if not msgs:
-            return []
-        if not has_trigger(msgs):
+        if not messages:
+            return ExtractionResult([], True)
+        if not has_trigger(messages):
             if not _always_fire():
-                _debug(f"no trigger in {jsonl_path.name}, skip")
-                return []
-            _debug(f"always-fire bypass for {jsonl_path.name}")
-        prompt = build_prompt(msgs)
+                _debug(f"no trigger in {source_name}, skip")
+                return ExtractionResult([], True)
+            _debug(f"always-fire bypass for {source_name}")
+        prompt = build_prompt(messages)
         # NEXT-16: prompt SHA256 캐시 hit → Gemma 호출 건너뜀 (deterministic).
         # jsonl 변하면 prompt 가 달라져 hash 도 자동 invalidate. opt-out env 있음.
         try:
@@ -590,18 +641,19 @@ def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
             cache_put = None  # type: ignore
         if cached is not None:
             _debug(
-                f"extract cache hit for {jsonl_path.name}: "
+                f"extract cache hit for {source_name}: "
                 f"{len(cached)} candidates"
             )
-            return cached
+            return ExtractionResult(cached, True)
         # NEXT-14b: Gemma 멱등성 보강 — 0건이면 retry, union 으로 candidates 모음.
         # 첫 호출 비-empty 면 즉시 반환 (latency 최소화). 0건일 때만 retry.
         attempts = 1 + _retries()
         results: list[list[dict]] = []
         any_call_failed = False  # bug-audit 2026-05-29 (extractor-negcache-1)
         any_parse_failed = False  # bug-audit 2026-06-02 (#5)
+        any_valid_response = False
         for i in range(attempts):
-            out = call_gemma(prompt)
+            out = call_model(prompt)
             if out is None:
                 # 전송 실패/빈 응답 (서버 다운·timeout·finish_reason=length). legit
                 # "후보 없음" 은 Gemma 가 "[]" 를 반환하므로 None 과 구분된다.
@@ -610,6 +662,8 @@ def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
                 parsed, parse_failed = _parse_gemma_json_ex(out)
                 if parse_failed:
                     any_parse_failed = True
+                else:
+                    any_valid_response = True
             else:
                 parsed = []
             results.append(parsed)
@@ -626,7 +680,7 @@ def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
             _debug(f"extract attempt={i + 1}/{attempts} candidates=0 (retry)")
         merged = _union_by_title(*results)
         if not merged:
-            _debug(f"extract all attempts 0 candidates for {jsonl_path.name}")
+            _debug(f"extract all attempts 0 candidates for {source_name}")
         elif sum(len(r) for r in results) != len(merged):
             _debug(
                 f"extract union merged={len(merged)} from "
@@ -648,9 +702,146 @@ def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
         elif skip_negative_cache:
             _debug(
                 f"skip caching empty result (gemma call failed={any_call_failed} "
-                f"parse failed={any_parse_failed}) for {jsonl_path.name}"
+                f"parse failed={any_parse_failed}) for {source_name}"
             )
-        return merged
+        return ExtractionResult(merged, any_valid_response)
     except Exception as e:
         _debug(f"extract FATAL: {e}\n{traceback.format_exc()}")
+        return ExtractionResult([], False)
+
+
+def _message_weight(message: dict) -> int:
+    return min(600, len(message.get("text") or "")) + sum(
+        min(300, len(c)) for c in (message.get("bash_commands") or [])[:5]
+    ) + 16
+
+
+def _max_chunk_chars() -> int:
+    try:
+        return max(2000, int(os.environ.get("MV3_EXTRACTOR_MAX_CHARS", "16000")))
+    except ValueError:
+        return 16000
+
+
+def _chunk_messages(messages: list[dict], overlap: int = 2) -> list[list[dict]]:
+    """Bound cloud input; large idle-period deltas are processed sequentially."""
+    if not messages:
         return []
+    budget = _max_chunk_chars()
+    chunks: list[list[dict]] = []
+    start = 0
+    while start < len(messages):
+        used = 0
+        end = start
+        while end < len(messages):
+            weight = _message_weight(messages[end])
+            if end > start and used + weight > budget:
+                break
+            used += weight
+            end += 1
+        chunks.append(messages[start:end])
+        if end >= len(messages):
+            break
+        start = max(start + 1, end - max(0, overlap))
+    return chunks
+
+
+def extract_from_jsonl(jsonl_path: Path) -> list[dict]:
+    """Legacy full-tail extractor for Claude SessionEnd and backfill."""
+    result = _extract_messages(_load_messages_routed(jsonl_path), jsonl_path.name)
+    return result.candidates
+
+
+_CURSOR_FILE = "codex_extraction_cursors.json"
+
+
+def _cursor_state(session_id: str, transcript: Path) -> int:
+    path = DATA_DIR / _CURSOR_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        item = data.get(session_id)
+        if not isinstance(item, dict):
+            return 0
+        if item.get("transcript") != str(transcript.resolve()):
+            return 0
+        return max(0, int(item.get("offset", 0)))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
+
+
+def _commit_cursor(session_id: str, transcript: Path, offset: int) -> bool:
+    path = DATA_DIR / _CURSOR_FILE
+    lock_path = path.with_suffix(".lock")
+    try:
+        import fcntl
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    data = {}
+            except (OSError, json.JSONDecodeError):
+                data = {}
+            data[session_id] = {
+                "transcript": str(transcript.resolve()),
+                "offset": int(offset),
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            try:
+                tmp.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+        return True
+    except Exception as e:
+        _debug(f"cursor commit fail: {type(e).__name__}: {e}")
+        return False
+
+
+def extract_incremental_codex(
+    jsonl_path: Path, session_id: str
+) -> ExtractionResult:
+    """Extract only new Codex messages and advance cursor after valid output."""
+    try:
+        from codex_session_loader import load_incremental_messages_codex
+
+        cursor = _cursor_state(session_id, jsonl_path)
+        loaded = load_incremental_messages_codex(
+            jsonl_path,
+            cursor,
+            overlap=3,
+            bootstrap_tail=12,
+        )
+        if not loaded.success:
+            return ExtractionResult([], False)
+        if not loaded.has_delta:
+            return ExtractionResult([], True)
+        # File bookkeeping with no new user/assistant message still advances safely.
+        if not loaded.messages:
+            ok = _commit_cursor(session_id, jsonl_path, loaded.end_offset)
+            return ExtractionResult([], ok)
+
+        results: list[list[dict]] = []
+        chunks = _chunk_messages(loaded.messages)
+        for idx, chunk in enumerate(chunks, start=1):
+            result = _extract_messages(
+                chunk, f"{jsonl_path.name} delta {idx}/{len(chunks)}"
+            )
+            results.append(result.candidates)
+            if not result.success:
+                _debug(
+                    f"incremental extraction failed; cursor retained at {cursor}"
+                )
+                return ExtractionResult(_union_by_title(*results), False)
+        merged = _union_by_title(*results)
+        if not _commit_cursor(session_id, jsonl_path, loaded.end_offset):
+            return ExtractionResult(merged, False)
+        return ExtractionResult(merged, True)
+    except Exception as e:
+        _debug(f"incremental FATAL: {e}\n{traceback.format_exc()}")
+        return ExtractionResult([], False)

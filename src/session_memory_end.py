@@ -43,7 +43,10 @@ if os.environ.get(RECURSION_GUARD_ENV) == "1":
 os.environ.setdefault("MV3_AUTO_COMPILE", "1")
 os.environ.setdefault("MV3_EXTRACTOR_ALWAYS_FIRE", "1")
 
-from memory_extractor import extract_from_jsonl  # type: ignore  # noqa: E402
+from memory_extractor import (  # type: ignore  # noqa: E402
+    extract_from_jsonl,
+    extract_incremental_codex,
+)
 
 # v3.2.7: production state pollution 방지. MV3_DATA_DIR / MV3_PROJECTS_ROOT
 # env var 가 set 됐으면 우선 (테스트 conftest 가 tmp 로 강제). default 는 production.
@@ -302,9 +305,26 @@ _CODEX_TURNS_CAP = 1000   # 초과 시 트림
 _CODEX_TURNS_KEEP = 500   # 트림 후 보존 개수
 
 
-def _codex_turn_seen_and_mark(sid: str, turn: str) -> bool:
-    """(session_id, turn_id) 멱등키 체크 후 기록. True = 이미 처리한 turn.
+def _codex_turn_seen(sid: str, turn: str) -> bool:
+    """True when a turn was successfully processed before."""
+    key = f"{sid}\t{turn}"
+    try:
+        import fcntl
+        _CODEX_TURNS_SEEN.parent.mkdir(parents=True, exist_ok=True)
+        with _CODEX_TURNS_SEEN.open("a+", encoding="utf-8") as f:
+            fcntl.flock(f, fcntl.LOCK_SH)
+            f.seek(0)
+            return key in f.read().splitlines()
+    except Exception as e:
+        _debug(f"codex turn-seen read fail (fail-open): {type(e).__name__}: {e}")
+        return False
 
+
+def _codex_turn_mark(sid: str, turn: str) -> bool:
+    """Mark only after a valid model result and cursor commit.
+
+    Do not merge this write into the pre-extraction duplicate check: a timeout or
+    malformed response must leave the turn eligible for the next Stop delivery.
     실패는 False 로 fail-open — 최악이 중복 추출인데 extractor 의 prompt
     SHA256 캐시가 흡수한다. flock 으로 동시 Stop 발화 경합 보호.
     """
@@ -329,10 +349,18 @@ def _codex_turn_seen_and_mark(sid: str, turn: str) -> bool:
             else:
                 f.seek(0, 2)
                 f.write(key + "\n")
-            return False
+            return True
     except Exception as e:
         _debug(f"codex turn-seen store fail (fail-open): {type(e).__name__}: {e}")
         return False
+
+
+def _codex_turn_seen_and_mark(sid: str, turn: str) -> bool:
+    """Legacy helper retained for callers/tests outside the Stop pipeline."""
+    if _codex_turn_seen(sid, turn):
+        return True
+    _codex_turn_mark(sid, turn)
+    return False
 
 
 def _codex_stop_transcript(payload: dict) -> Path | None:
@@ -350,7 +378,7 @@ def _codex_stop_transcript(payload: dict) -> Path | None:
         return None
     sid = str(payload.get("session_id") or "")
     turn = str(payload.get("turn_id") or "")
-    if sid and turn and _codex_turn_seen_and_mark(sid, turn):
+    if sid and turn and _codex_turn_seen(sid, turn):
         _debug(f"codex-stop: turn 중복 — skip ({sid[:8]}/{turn[:8]})")
         return None
     _debug(f"codex-stop: extract {p.name} ({sid[:8]}/{turn[:8]})")
@@ -374,6 +402,8 @@ def main() -> int:
         # PROJECTS_ROOT glob 을 타지 않는다. 이후 파이프라인(추출→reverify→
         # compile→staged→index/alias)은 Claude 경로와 완전 공유.
         jsonl: Path | None = None
+        codex_stop = False
+        codex_turn = ""
         if (
             isinstance(payload, dict)
             and payload.get("hook_event_name") == "Stop"
@@ -383,6 +413,8 @@ def main() -> int:
             if jsonl is None:
                 return 0
             sid = str(payload.get("session_id") or "codex-unknown")
+            codex_turn = str(payload.get("turn_id") or "")
+            codex_stop = True
 
         if jsonl is None:
             if not sid:
@@ -396,7 +428,19 @@ def main() -> int:
             if len(matches) > 1:
                 _debug(f"jsonl multi-hit for {sid[:8]}: picked {jsonl.parent.name}")
 
-        candidates = extract_from_jsonl(jsonl)
+        if codex_stop:
+            extracted = extract_incremental_codex(jsonl, sid)
+            if not extracted.success:
+                _debug(
+                    f"codex-stop: extraction failed; cursor/turn retained "
+                    f"({sid[:8]}/{codex_turn[:8]})"
+                )
+                return 0
+            candidates = extracted.candidates
+            if codex_turn:
+                _codex_turn_mark(sid, codex_turn)
+        else:
+            candidates = extract_from_jsonl(jsonl)
 
         # Phase 1③ (reliability): stale 재검증 증분 — candidates 유무와 무관하게 매
         # SessionEnd 시도(maybe_scan_due 가 sidecar 로 7일 self-throttle). no-candidate

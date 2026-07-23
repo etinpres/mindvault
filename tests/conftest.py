@@ -48,7 +48,7 @@ for _p in (_WORKTREE_HOOKS, _WORKTREE_SRC):
 _MV3_MODULES = (
     "session_memory_end", "session_memory", "memory_search", "memory_indexer",
     "memory_extractor", "memory_compiler", "memory_review_cli",
-    "codex_session_loader",
+    "codex_session_loader", "llm_backend", "stop_scheduler",
     "extractor_cache", "extractor_stats_cli", "query_intent", "turns_cache",
     "backfill_cli", "dedup_cli", "alias_generator", "sources_cli",
     "eval_top3_domain", "self_eval", "search",
@@ -87,6 +87,10 @@ os.environ["MV3_EXTRA_MEMORY_DIRS"] = ""
 # 실제 Gemma(:8080) 로 분류 요청을 보낸다(읽기전용 비파괴지만 비-hermetic). 0 으로
 # 강제. 개별 테스트는 patch.dict({"MV3_GEMMA_INTENT":"1"}) 로 per-test override.
 os.environ["MV3_GEMMA_INTENT"] = "0"
+# v4.1 Luna 전환: 기존 extractor 단위 테스트는 로컬 Gemma 호출 함수를
+# monkeypatch 하는 계약을 유지한다. Luna 자체는 test_llm_backend.py 와
+# incremental E2E 테스트에서 명시적으로 켠다.
+os.environ["MV3_LLM_PROVIDER"] = "gemma"
 
 for _p in (
     Path(os.environ["MV3_DATA_DIR"]),
