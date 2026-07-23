@@ -403,22 +403,13 @@ class TestAliasBomTolerance(unittest.TestCase):
         self.assertEqual(meta[0], "foo")
 
 
-class TestQueryIntentNonDictGemma(unittest.TestCase):
-    """#21 — Gemma intent 응답이 비-dict valid JSON 이어도 _call_gemma_intent 가
-    AttributeError 없이 None 을 반환해야 한다 (hook 핫패스 보호)."""
+class TestQueryIntentNoModel(unittest.TestCase):
+    """The hook classifier remains deterministic and model-free."""
 
-    def test_non_dict_json_bodies_return_none(self):
+    def test_model_fallback_symbols_absent(self):
         import query_intent
-        for payload in (
-            b"[]", b"42", b'"error"', b"null", b'{"choices":["s"]}',
-            # R3: choices 가 truthy 비-list(dict/int)인 변종도 raise 없이 None.
-            b'{"choices": {"x":1}}', b'{"choices": 123}',
-            b'{"choices": {"message":"oops"}}',
-        ):
-            with patch("query_intent.urllib.request.urlopen") as mo:
-                mo.return_value.__enter__.return_value.read.return_value = payload
-                # AttributeError/TypeError/KeyError 가 전파되면 테스트 실패. None 이어야 한다.
-                self.assertIsNone(query_intent._call_gemma_intent("짧은쿼리"), payload)
+        self.assertFalse(hasattr(query_intent, "_call_gemma_intent"))
+        self.assertFalse(hasattr(query_intent, "classify_with_gemma"))
 
 
 class TestMetaSelfRefNotMidSentence(unittest.TestCase):

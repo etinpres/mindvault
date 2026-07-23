@@ -232,7 +232,7 @@ def fmt_human(d: dict, hours: float | None) -> str:
     if "attempts" in d:
         a = d["attempts"]
         lines.append(
-            f"Gemma attempts: min={a['min']} max={a['max']} avg={a['avg']}"
+            f"LLM attempts: min={a['min']} max={a['max']} avg={a['avg']}"
         )
 
     if "candidates_per_extract" in d:

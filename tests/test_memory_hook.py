@@ -52,11 +52,8 @@ class TestHookIO(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), b"")
 
 
-class TestHookTimeoutPropagation(unittest.TestCase):
-    """post-ship 회귀 — intent classify 의 broad except 가 _Timeout 을 swallow
-    하면 HARD_TIMEOUT_MS 가 무력화돼 hook 이 budget 넘어서까지 동작.
-    classify_with_gemma 안에서 _Timeout 이 떠도 outer 핸들러가 잡아야 함.
-    """
+class TestHookIntentIsDeterministic(unittest.TestCase):
+    """The 400 ms hook must never invoke a model-backed intent fallback."""
 
     def _load_hook_module(self):
         import importlib.util
@@ -65,7 +62,7 @@ class TestHookTimeoutPropagation(unittest.TestCase):
         spec.loader.exec_module(mod)
         return mod
 
-    def test_timeout_in_gemma_reaches_outer_handler(self):
+    def test_unknown_intent_does_not_call_llm(self):
         hk = self._load_hook_module()
         import io
         from unittest.mock import patch
@@ -76,29 +73,12 @@ class TestHookTimeoutPropagation(unittest.TestCase):
                 sys.path.insert(0, str(d))
         import query_intent
 
-        debug_messages: list[str] = []
+        self.assertFalse(hasattr(query_intent, "classify_with_gemma"))
         with patch.object(
-            query_intent,
-            "classify_with_gemma",
-            side_effect=hk._Timeout(),
-        ), patch.dict(
-            os.environ, {"MV3_GEMMA_INTENT": "1"}
-        ), patch.object(
-            hk, "_debug", side_effect=lambda m: debug_messages.append(m)
-        ), patch.object(
             sys, "stdin", io.StringIO(json.dumps({"prompt": "어떤 짧은 질문입니까?"}))
-        ):
+        ), patch.object(hk, "_mtime_changed", return_value=False):
             rc = hk.main()
         self.assertEqual(rc, 0)
-        # _Timeout 이 outer 까지 도달했다면 "timeout ... skip" 로그가 남는다.
-        # broad except 가 swallow 했다면 "intent classify skipped" 로 그치고
-        # recall 까지 진행 → 다른 로그가 더 박힌다.
-        joined = " | ".join(debug_messages)
-        self.assertIn("timeout", joined.lower(), f"messages={debug_messages}")
-        self.assertNotIn(
-            "intent classify skipped", joined,
-            f"_Timeout 이 swallow 됨: {debug_messages}",
-        )
 
 
 class TestMtimeThrottle(unittest.TestCase):

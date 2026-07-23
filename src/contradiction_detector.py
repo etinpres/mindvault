@@ -7,14 +7,9 @@ import math
 import os
 import re
 import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-
-from memory_compiler import GEMMA_MODEL, GEMMA_TIMEOUT, GEMMA_URL
-
 
 def _runtime_dir() -> Path:
     """런타임 데이터 디렉토리 (debug.log, contradictions.jsonl). env 우선."""
@@ -96,7 +91,7 @@ class Contradiction:
 
 
 def detect_contradictions(candidate: dict, mem_dir: Path) -> list[Contradiction]:
-    """Hybrid recall + Gemma 분류로 candidate 와 mem_dir 안 충돌 후보 검출.
+    """Hybrid recall + Luna 1회 분류로 candidate 와 mem_dir 안 충돌 후보 검출.
 
     Args:
         candidate: {
@@ -110,7 +105,7 @@ def detect_contradictions(candidate: dict, mem_dir: Path) -> list[Contradiction]
 
     Returns:
         confidence ≥ CONFIDENCE_THRESHOLD 이고 kind != NO_CONFLICT 인 항목만.
-        Gemma 호출 실패 / parse 실패 / low confidence / no_conflict 는 모두 silent skip.
+        Luna 호출 실패 / parse 실패 / low confidence / no_conflict 는 모두 silent skip.
     """
     candidates = _recall_candidates(candidate, mem_dir, top_k=5)
     if not candidates:
@@ -120,14 +115,18 @@ def detect_contradictions(candidate: dict, mem_dir: Path) -> list[Contradiction]
     if not new_body:
         return []
 
-    contradictions: list[Contradiction] = []
+    pairs: list[tuple[Path, str]] = []
     for path, _score in candidates:
         try:
             old_body = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        pairs.append((path, old_body))
 
-        result = _classify_pair(new_body, old_body)
+    classified = _classify_pairs(new_body, [body for _, body in pairs])
+    contradictions: list[Contradiction] = []
+    for index, (path, old_body) in enumerate(pairs):
+        result = classified.get(index)
         if not result:
             continue
         if result["kind"] == ContradictionKind.NO_CONFLICT.value:
@@ -225,56 +224,17 @@ def _recall_candidates(
 
 
 def _call_gemma_for_classify(prompt: str, max_tokens: int = 1536) -> str | None:
-    """Gemma 4 E4B 호출. 실패 시 None (silent, _debug 로깅).
-
-    BaseException 은 통과시킴 (sentinel pattern, hook hard-budget 호환).
-
-    max_tokens 는 reasoning(CoT) 분리 출력 모델 기준. gemma-4-e4b 가 응답을
-    message.reasoning + message.content 로 나눠 내므로, budget 이 작으면 reasoning
-    (~500-850 tok) 이 다 먹고 content(JSON) 가 빈 채 finish_reason=length 로 잘림.
-    """
-    body = json.dumps({
-        "model": GEMMA_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": 0.0,
-    }).encode()
-    req = urllib.request.Request(
-        GEMMA_URL,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    """Legacy test/API alias: return one Luna classification as JSON."""
+    del max_tokens
     try:
-        with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-    except (urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError, OSError, TimeoutError) as e:
-        # bug-audit 2026-06-01 (gemma-unicodedecode): max_tokens 경계에서 멀티바이트
-        # UTF-8 절단 시 json.loads(bytes) 가 UnicodeDecodeError(ValueError, JSONDecodeError 아님)
-        # 를 던져 캐치 튜플을 빠져나가 detect 루프를 중단시켰다. 튜플에 추가.
-        _debug(f"gemma classify fail: {type(e).__name__}: {e}")
+        from llm_backend import call_codex_contradictions
+        rows = call_codex_contradictions(prompt)
+    except Exception as e:
+        _debug(f"luna classify fail: {type(e).__name__}: {e}")
         return None
-
-    choices = data.get("choices") or []
-    if not choices or not isinstance(choices[0], dict):
+    if not rows:
         return None
-    message = choices[0].get("message")
-    if not isinstance(message, dict):
-        return None
-    raw_content = message.get("content")
-    if raw_content is not None and not isinstance(raw_content, str):
-        # bug-audit 2026-06-01 (gemma-nonstr-content): content-block 리스트 등 비-문자열
-        # content 에 .strip() 하면 AttributeError 가 detect 루프 전체를 중단시킨다.
-        _debug(f"gemma classify non-str content type={type(raw_content).__name__}")
-        return None
-    content = (raw_content or "").strip()
-    if not content:
-        # Reasoning models can burn the whole budget on CoT (message.reasoning)
-        # and emit empty content with finish_reason=length. Without this log it
-        # looks identical to a clean no-detection and the failure stays invisible.
-        _debug(f"gemma classify empty content (finish_reason={choices[0].get('finish_reason')})")
-        return None
-    return content
+    return json.dumps(rows[0], ensure_ascii=False)
 
 
 def _strip_code_fences(text: str) -> str:
@@ -345,6 +305,76 @@ def _relevant_excerpt(text: str, query: str, limit: int = CLASSIFY_BODY_LIMIT) -
     return (header + prefix + excerpt)[:limit]
 
 
+def _normalize_classification(parsed: object) -> dict | None:
+    if not isinstance(parsed, dict):
+        return None
+    valid_kinds = {k.value for k in ContradictionKind}
+    kind = parsed.get("kind")
+    if not isinstance(kind, str) or kind not in valid_kinds:
+        return None
+    reason = parsed.get("reason", "")
+    parsed = dict(parsed)
+    parsed["reason"] = reason if isinstance(reason, str) else ""
+
+    raw_conf = parsed.get("confidence", 0.5)
+    if isinstance(raw_conf, bool):
+        conf = 0.5
+    else:
+        try:
+            conf = float(raw_conf)
+        except (TypeError, ValueError):
+            conf = 0.5
+        if not math.isfinite(conf) or not (0.0 <= conf <= 1.0):
+            conf = 0.5
+    parsed["confidence"] = conf
+    return parsed
+
+
+def _classify_pairs(new_body: str, old_bodies: list[str]) -> dict[int, dict]:
+    """Classify up to five recalled pairs in one Luna request."""
+    if not old_bodies:
+        return {}
+    blocks: list[str] = []
+    for index, old_body in enumerate(old_bodies):
+        old_excerpt = _relevant_excerpt(old_body, new_body)
+        new_excerpt = _relevant_excerpt(new_body, old_body)
+        blocks.append(
+            f"[비교 {index}]\n"
+            f"[기존 항목]\n{old_excerpt}\n\n"
+            f"[새 항목]\n{new_excerpt}"
+        )
+    prompt = (
+        "아래 여러 메모리 비교를 각각 독립적으로 판정하세요.\n"
+        "두 항목이 동시에 참일 수 있으면 반드시 no_conflict입니다.\n"
+        "metric_update는 같은 지표의 값 갱신, decision_reversal은 같은 결정의 "
+        "명시적 번복, fact_correction은 특정 기존 사실의 정정일 때만 사용하세요.\n"
+        "보완·추가·심화·예시는 no_conflict입니다.\n"
+        "각 비교마다 index, kind, reason, confidence를 결과에 정확히 한 번 넣으세요.\n\n"
+        + "\n\n".join(blocks)
+    )
+    try:
+        from llm_backend import call_codex_contradictions
+        rows = call_codex_contradictions(prompt)
+    except Exception as exc:
+        _debug(f"luna batch classify fail: {type(exc).__name__}: {exc}")
+        return {}
+
+    out: dict[int, dict] = {}
+    for row in rows:
+        index = row.get("index")
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or not (0 <= index < len(old_bodies))
+            or index in out
+        ):
+            continue
+        normalized = _normalize_classification(row)
+        if normalized is not None:
+            out[index] = normalized
+    return out
+
+
 def _classify_pair(new_body: str, old_body: str) -> dict | None:
     """두 body 비교 후 {'kind', 'reason', 'confidence'} 반환. failure → None.
 
@@ -364,32 +394,7 @@ def _classify_pair(new_body: str, old_body: str) -> dict | None:
     except json.JSONDecodeError:
         return None
 
-    if not isinstance(parsed, dict):
-        return None
-
-    valid_kinds = {k.value for k in ContradictionKind}
-    kind = parsed.get("kind")
-    if not isinstance(kind, str) or kind not in valid_kinds:
-        return None
-
-    parsed.setdefault("reason", "")
-
-    # Validate confidence: finite float in [0,1]. nan/inf/out-of-range/bool all
-    # fall back to 0.5 (below CONFIDENCE_THRESHOLD, so a hallucinated value won't
-    # pass the gate — nan < 0.7 is False, which would silently accept otherwise).
-    raw_conf = parsed.get("confidence", 0.5)
-    if isinstance(raw_conf, bool):
-        conf = 0.5
-    else:
-        try:
-            conf = float(raw_conf)
-        except (TypeError, ValueError):
-            conf = 0.5
-        if not math.isfinite(conf) or not (0.0 <= conf <= 1.0):
-            conf = 0.5
-    parsed["confidence"] = conf
-
-    return parsed
+    return _normalize_classification(parsed)
 
 
 def append_to_review_queue(

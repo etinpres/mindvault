@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""MindVault v3 Sprint 3 — Gemma 기반 기억 후보 추출기.
+"""MindVault v4 — Luna 기반 기억 후보 추출기.
 
-트리거 키워드 감지 → Gemma에 구조화 프롬프트 → JSON 배열 파싱 → 유효 항목 반환.
+트리거 키워드 감지 → Luna 구조화 호출 → JSON 배열 파싱 → 유효 항목 반환.
 """
 from __future__ import annotations
 
@@ -10,16 +10,11 @@ import os
 import re
 import time
 import traceback
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 # v3.2.7: production state pollution 방지. MV3_DATA_DIR env var 우선.
 DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expanduser()
 DEBUG_LOG = DATA_DIR / "debug.log"
-GEMMA_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
-GEMMA_TIMEOUT = 45
 MAX_BODY_CHARS = 200
 MAX_TITLE_CHARS = 50
 # Sprint 13: procedural type 추가 — 명령어 syntax·workflow·환경 설정.
@@ -257,73 +252,40 @@ def has_trigger(messages: list[dict]) -> bool:
 
 
 def call_gemma(prompt: str, max_tokens: int = 1500) -> str | None:
-    body = json.dumps(
-        {
-            "model": GEMMA_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": 0.2,
-            # mem-fan-fix 2026-06-19: thinking off (top-level, 12B 전용). peak 폭증 방지.
-            "enable_thinking": False,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        GEMMA_URL,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    """Legacy test/API alias. Runtime is Luna; no local Gemma call remains."""
+    del max_tokens
     try:
-        with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-        choices = data.get("choices") or []
-        if not choices:
-            return None
-        choice0 = choices[0]
-        # bug-audit 2026-06-01 (extractor-truncation-negcache): finish_reason=length 면
-        # 응답이 중간 절단돼 JSON 배열이 안 닫힌다. 이전엔 truncation 도 non-empty 절단
-        # 문자열로 반환돼 parse=[] → 빈 결과가 영구 negative 캐시(extractor-negcache-1
-        # 가드 우회). 절단은 '호출 실패'로 취급해 None 반환 → 빈 결과 캐시 차단·재시도.
-        if choice0.get("finish_reason") == "length":
-            _debug("gemma finish_reason=length (truncated) — treat as call fail")
-            return None
-        # non-str content(content-block 리스트 등) 방어 — .strip() AttributeError 회피.
-        raw = (choice0.get("message") or {}).get("content")
-        content = raw if isinstance(raw, str) else ""
-        return content.strip() or None
-    except (TimeoutError, urllib.error.URLError, json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as e:
-        # audit-2026-05-24: BaseException/_Timeout 은 의도적으로 전파.
-        _debug(f"gemma fail: {type(e).__name__} {e}")
+        from llm_backend import call_codex_extractor
+        return call_codex_extractor(prompt)
+    except Exception as e:
+        _debug(f"luna backend fail: {type(e).__name__}: {e}")
         return None
 
 
 def _provider() -> str:
-    """Extraction backend. Production wrapper pins codex_cli; local is fallback."""
+    """Extraction backend. Privacy-local mode disables cloud extraction."""
     if os.environ.get("MV3_PRIVACY", "").strip().lower() == "local":
-        return "gemma"
-    return os.environ.get("MV3_LLM_PROVIDER", "gemma").strip().lower()
+        return "disabled"
+    provider = os.environ.get("MV3_LLM_PROVIDER", "codex_cli").strip().lower()
+    # Upgrade compatibility: an old explicit value must not try a local model.
+    return "codex_cli" if provider == "gemma" else provider
 
 
 def call_model(prompt: str, max_tokens: int = 1500) -> str | None:
-    """Route one extraction call without silently multiplying paid/cloud calls."""
+    """Route one extraction call without fallback or duplicate cloud attempts."""
     provider = _provider()
-    # A redaction marker means the source contained credentials. Keep that prompt
-    # local even though the literal secret has already been removed.
-    if provider == "gemma" or "[REDACTED_" in prompt or "Bearer [REDACTED]" in prompt:
-        return call_gemma(prompt, max_tokens=max_tokens)
+    if provider == "disabled":
+        _debug("extraction disabled by MV3_PRIVACY=local")
+        return None
+    # No local LLM remains. A redaction marker means a secret was present, so
+    # skip this extraction instead of uploading even its redacted context.
+    if "[REDACTED_" in prompt or "Bearer [REDACTED]" in prompt:
+        _debug("extraction skipped: sensitive marker")
+        return None
     if provider != "codex_cli":
         _debug(f"unknown LLM provider={provider!r}")
         return None
-    try:
-        from llm_backend import call_codex_extractor
-        out = call_codex_extractor(prompt)
-    except Exception as e:
-        _debug(f"codex-cli backend fail: {type(e).__name__}: {e}")
-        out = None
-    if out is None and os.environ.get("MV3_LLM_FALLBACK", "").strip() == "gemma":
-        _debug("codex-cli unavailable; explicit gemma fallback")
-        return call_gemma(prompt, max_tokens=max_tokens)
-    return out
+    return call_gemma(prompt, max_tokens=max_tokens)
 
 
 def build_prompt(messages: list[dict]) -> str:
@@ -536,19 +498,17 @@ def parse_gemma_json(out: str) -> list[dict]:
 def _retries() -> int:
     """Backend-aware additional attempts.
 
-    Luna/Codex is one-shot by default. Gemma keeps the legacy two retries for
-    compatibility and recall. MV3_EXTRACTOR_RETRIES overrides both; the old
-    MV3_EXTRACTOR_GEMMA_RETRIES remains accepted for local deployments.
+    Luna/Codex is one-shot by default. MV3_EXTRACTOR_RETRIES is retained only
+    as an explicit operator override; automatic retries would multiply usage.
     """
     explicit = os.environ.get("MV3_EXTRACTOR_RETRIES")
-    if explicit is None and _provider() == "gemma":
-        explicit = os.environ.get("MV3_EXTRACTOR_GEMMA_RETRIES", "2")
     if explicit is None:
-        explicit = "0"
+        # Deprecated env remains an upgrade-compatible explicit override.
+        explicit = os.environ.get("MV3_EXTRACTOR_GEMMA_RETRIES", "0")
     try:
         return max(0, int(explicit))
     except ValueError:
-        return 2 if _provider() == "gemma" else 0
+        return 0
 
 
 def _tail_turns() -> int:

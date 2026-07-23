@@ -87,7 +87,6 @@ def test_src_modules_honor_env_var():
         ("memory_search", ["DB_PATH", "DEBUG_LOG", "ALIAS_INDEX_PATH"]),
         ("extractor_cache", ["CACHE_DB", "DEBUG_LOG"]),
         ("turns_cache", ["CACHE_DB", "DEBUG_LOG"]),
-        ("query_intent", ["_DEBUG_LOG", "_GEMMA_CACHE_DB"]),
         ("memory_review_cli", ["DEBUG_LOG"]),
         ("memory_indexer", ["DEBUG_LOG", "DB_PATH"]),
         ("alias_generator", ["DEBUG_LOG", "INDEX_PATH"]),
@@ -187,9 +186,6 @@ def test_production_debug_log_not_touched_by_worktree_debug_call():
     sme = _load_worktree_module("session_memory_end")
     sme._debug("v3.2.7 isolation regression: session_memory_end")
 
-    qi = _load_worktree_module("query_intent")
-    qi._debug("v3.2.7 isolation regression: query_intent")
-
     after_mtime = production_log.stat().st_mtime
     after_size = production_log.stat().st_size
     assert before_mtime == after_mtime, (
@@ -204,7 +200,6 @@ def test_production_debug_log_not_touched_by_worktree_debug_call():
     assert tmp_log.exists(), "tmp debug.log not created"
     content = tmp_log.read_text()
     assert "v3.2.7 isolation regression: session_memory_end" in content
-    assert "v3.2.7 isolation regression: query_intent" in content
 
 
 def test_worktree_alias_index_path_isolated():

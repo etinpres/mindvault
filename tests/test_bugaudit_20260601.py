@@ -120,19 +120,14 @@ class TestIndexerNonStringFrontmatter(unittest.TestCase):
 
 
 class TestClassifyNonStrContent(unittest.TestCase):
-    def test_list_content_returns_none_no_crash(self):
+    def test_non_dict_structured_row_returns_none_no_crash(self):
         import contradiction_detector as cd
-
-        class _Resp:
-            def __init__(self, payload): self._p = payload
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return self._p
-
-        payload = json.dumps(
-            {"choices": [{"message": {"content": [{"type": "text", "text": "x"}]}}]}
-        ).encode()
-        with patch.object(cd.urllib.request, "urlopen", return_value=_Resp(payload)):
+        import llm_backend
+        with patch.object(
+            llm_backend,
+            "call_codex_contradictions",
+            return_value=[],
+        ):
             self.assertIsNone(cd._call_gemma_for_classify("prompt"))
 
 
@@ -166,17 +161,16 @@ class TestBlockListRegexSpaces(unittest.TestCase):
 
 
 class TestClassifyUnicodeDecodeError(unittest.TestCase):
-    """#10: 깨진 UTF-8 응답에 UnicodeDecodeError 가 detect 루프를 뚫지 않아야 한다."""
+    """Backend decode failure remains a graceful abstention."""
 
     def test_invalid_utf8_returns_none(self):
         import contradiction_detector as cd
-
-        class _Resp:
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
-            def read(self): return b"\xff\xfe not valid utf8 \x80"
-
-        with patch.object(cd.urllib.request, "urlopen", return_value=_Resp()):
+        import llm_backend
+        with patch.object(
+            llm_backend,
+            "call_codex_contradictions",
+            side_effect=UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad"),
+        ):
             self.assertIsNone(cd._call_gemma_for_classify("prompt"))
 
 

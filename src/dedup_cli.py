@@ -15,7 +15,7 @@ Sprint 11/12/15 BUILD-LOG §"미해결" 의 duplicate memory 우려 해소.
 
 명령:
   python3 dedup_cli.py list                  # name-dup + stem-collision JSON 출력
-  python3 dedup_cli.py merge <name>          # name-dup 그룹의 Gemma 통합 + canonical 선택
+  python3 dedup_cli.py merge <name>          # name-dup 그룹의 LLM 통합 + canonical 선택
   python3 dedup_cli.py rename <path> <new_stem>  # stem-collision 해소: 파일명만 변경
 """
 from __future__ import annotations
@@ -184,7 +184,7 @@ def cmd_merge(name_key: str, dry_run: bool = False) -> int:
     """name-dup 그룹의 본문을 Memory Compiler 로 통합, canonical 만 유지.
 
     canonical = mtime 최신 + size 큰 쪽. 나머지는 .bak 백업 후 삭제. canonical 본문은
-    Gemma 가 통합한 결과로 overwrite (memory_compiler._compile_update 재활용).
+    Luna가 통합한 결과로 overwrite (memory_compiler._compile_update 재활용).
     """
     result = _scan()
     matched = [g for g in result["name_dups"] if g["key"] == name_key.lower()]
@@ -222,7 +222,7 @@ def cmd_merge(name_key: str, dry_run: bool = False) -> int:
         new_body = _compile_update(merged_body, candidate)
         if not new_body:
             compile_log.append({
-                "path": str(other), "ok": False, "error": "gemma compile failed",
+                "path": str(other), "ok": False, "error": "LLM compile failed",
             })
             continue
         merged_body = new_body
@@ -242,8 +242,8 @@ def cmd_merge(name_key: str, dry_run: bool = False) -> int:
         return 0
 
     # bug-audit 2026-05-29 (dedup-merge-1 / dedup-merge-empty-6): 데이터 유실 가드.
-    # 통합 성공한 other 가 하나도 없거나(예: Gemma 다운으로 전부 실패) merged_body 가
-    # 비면 canonical overwrite/삭제를 시작하지 않고 중단한다. 이전엔 Gemma 가 죽어도
+    # 통합 성공한 other 가 하나도 없거나(예: Luna 호출 실패) merged_body 가
+    # 비면 canonical overwrite/삭제를 시작하지 않고 중단한다. 이전엔 LLM이 실패해도
     # canonical 을 빈/원본 본문으로 덮고 others 를 전부 지워 그룹이 통째로 유실됐다.
     if not merged_others or not merged_body.strip():
         plan.update({

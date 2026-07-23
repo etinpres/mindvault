@@ -403,7 +403,7 @@ class TestV3_2_3FixSweep(unittest.TestCase):
         첫 plist deploy 전 mkdir -p 필요.
         """
         sh = (self.repo / "install.sh").read_text()
-        self.assertIn('mkdir -p "$GEMMA_LAUNCH_AGENTS"', sh,
+        self.assertIn('"$HOME/Library/LaunchAgents"', sh,
                       "LaunchAgents 디렉토리 자동 생성 누락")
 
     # ── HIGH UX 가드 (#4, #5) ─────────────────────────────────────────
@@ -464,12 +464,12 @@ class TestV3_2_3FixSweep(unittest.TestCase):
         self.assertIn("os.replace", sh, "atomic os.replace 누락")
         self.assertIn("json.loads(serialized)", sh, "JSON 재검증 누락")
 
-    def test_install_plist_loaded_always_refresh(self):
-        """#18 — plist-loaded step 은 cheap step. content drift 차단 위해 항상 refresh."""
+    def test_install_removes_retired_gemma_jobs(self):
+        """v4.1 upgrade removes the retired resident Gemma jobs."""
         sh = (self.repo / "install.sh").read_text()
-        # step entry 정리 후 재기록
-        self.assertIn('grep -v "^plist-loaded$"', sh,
-                      "plist-loaded step 정리 후 재기록 누락")
+        self.assertIn("com.mindvault.gemma-mlx", sh)
+        self.assertIn("com.yonghaekim.gemma-mlx-daily-restart", sh)
+        self.assertIn("launchctl bootout", sh)
 
     def test_install_ups_register_cleanup(self):
         """#19 — UserPromptSubmit 도 SessionStart/End 같은 cleanup-then-register 패턴."""
@@ -541,7 +541,7 @@ class TestV3_2_4PythonBinResolve(unittest.TestCase):
 
     def test_wrappers_have_python_bin_placeholder(self):
         """wrapper 본문에 __INSTALL_PYTHON_BIN__ placeholder 가 있어야 함."""
-        for name in ("arctic_ko_server_runner.sh", "gemma_server_runner.sh"):
+        for name in ("arctic_ko_server_runner.sh",):
             body = (self.repo / "scripts" / name).read_text()
             self.assertIn("__INSTALL_PYTHON_BIN__", body,
                           f"{name}: placeholder 누락")
@@ -560,9 +560,6 @@ class TestV3_2_4PythonBinResolve(unittest.TestCase):
         self.assertIn("deploy_runner()", sh, "deploy_runner 헬퍼 정의 누락")
         self.assertIn("__INSTALL_PYTHON_BIN__", sh,
                       "install.sh 안 placeholder 치환 로직 누락")
-        # 두 wrapper 다 deploy_runner 로 호출
-        self.assertIn('deploy_runner "$GEMMA_RUNNER_SRC"', sh,
-                      "Gemma runner deploy_runner 호출 누락")
         self.assertIn('deploy_runner "$ARCTIC_RUNNER_SRC"', sh,
                       "Arctic runner deploy_runner 호출 누락")
 

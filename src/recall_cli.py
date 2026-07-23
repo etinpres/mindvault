@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MindVault v3 — /recall CLI 진입점.
 
-JSONL 세션(FTS5 + Gemma 재순위/요약, Sprint 2) 또는 memory/*.md(hybrid RRF, Sprint 4)
+JSONL 세션(FTS5 + Luna batch 재순위/요약) 또는 memory/*.md(hybrid RRF)
 또는 둘 다 검색.
 
 usage:
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 def _search_sessions(query: str, top_k: int = 3) -> list[dict]:
-    """Sprint 2: JSONL FTS5 + Gemma 재순위/요약."""
+    """JSONL FTS5 + Luna batch 재순위/요약."""
     from search import recall as session_recall  # noqa: WPS433
     return session_recall(query, top_k=top_k)
 

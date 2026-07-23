@@ -58,4 +58,4 @@ def test_extractor_provider_has_no_luna_retry(monkeypatch):
     monkeypatch.delenv("MV3_EXTRACTOR_RETRIES", raising=False)
     assert memory_extractor._retries() == 0
     monkeypatch.setenv("MV3_LLM_PROVIDER", "gemma")
-    assert memory_extractor._retries() == 2
+    assert memory_extractor._retries() == 0

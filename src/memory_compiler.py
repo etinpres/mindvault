@@ -2,7 +2,7 @@
 """MindVault v3 Sprint 14 — Memory Compiler.
 
 세션 종료 시 extractor 가 뽑은 후보(candidate) 와 기존 memory 파일의 매칭을 자동
-판단해, 동일 주제 메모리가 이미 있으면 Gemma 로 정제·통합한 update 후보로 변환한다.
+판단해, 동일 주제 메모리가 이미 있으면 Luna 로 정제·통합한 update 후보로 변환한다.
 Karpathy LLM-as-compiler 패턴의 핵심 구현체.
 
 opt-in: session_memory_end 가 환경변수 `MV3_AUTO_COMPILE=1` 일 때만 호출.
@@ -27,7 +27,6 @@ import re
 import sys
 import time
 import traceback
-import urllib.request
 from pathlib import Path
 
 # memory_indexer 의 디렉토리 정책·frontmatter 파서 공유
@@ -42,10 +41,7 @@ from memory_indexer import (  # noqa: E402
 # v3.2.7: production state pollution 방지. MV3_DATA_DIR env var 우선.
 DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expanduser()
 DEBUG_LOG = DATA_DIR / "debug.log"
-GEMMA_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
-GEMMA_TIMEOUT = 45
-COMPILE_BODY_LIMIT = 500  # update 결과 본문 최대 글자 수 (soft hint to Gemma)
+COMPILE_BODY_LIMIT = 500  # update 결과 본문 최대 글자 수 (soft hint)
 COMPILE_BODY_HARD_LIMIT = 1200  # 실제 trim 한계
 ENABLE_AUTO_COMPILE_ENV = "MV3_AUTO_COMPILE"
 # Sprint NEXT-2 — embedding fallback. name exact·slug 매칭이 모두 실패했을 때
@@ -82,33 +78,13 @@ def _candidate_slug(stem: str) -> str:
 
 
 def _call_gemma(prompt: str, max_tokens: int = 800) -> str | None:
-    """memory_extractor.call_gemma 와 동일 패턴 — 직접 구현해 모듈 결합 최소화."""
-    body = json.dumps(
-        {
-            "model": GEMMA_MODEL,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "temperature": 0.2,
-            # mem-fan-fix 2026-06-19: thinking off (top-level, 12B 전용). peak 폭증 방지.
-            "enable_thinking": False,
-        }
-    ).encode()
-    req = urllib.request.Request(
-        GEMMA_URL,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    """Legacy alias: compile through one schema-constrained Luna call."""
+    del max_tokens
     try:
-        with urllib.request.urlopen(req, timeout=GEMMA_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-        choices = data.get("choices") or []
-        if not choices:
-            return None
-        content = (choices[0].get("message") or {}).get("content") or ""
-        return content.strip() or None
+        from llm_backend import call_codex_text
+        return call_codex_text("compile", prompt)
     except Exception as e:
-        _debug(f"gemma fail: {type(e).__name__} {e}")
+        _debug(f"luna fail: {type(e).__name__} {e}")
         return None
 
 
@@ -292,9 +268,9 @@ def _strip_fences(text: str) -> str:
 
 
 def _compile_update(existing_body: str, candidate: dict) -> str | None:
-    """기존 body 와 새 fact 를 Gemma 로 통합 → 정제 body. 실패 시 None.
+    """기존 body 와 새 fact 를 Luna 로 통합 → 정제 body. 실패 시 None.
 
-    Gemma 응답에서 markdown fence 제거 + hard limit trim 후 반환.
+    응답에서 markdown fence 제거 + hard limit trim 후 반환.
     """
     prompt = _build_compile_prompt(existing_body, candidate)
     out = _call_gemma(prompt, max_tokens=800)
@@ -342,9 +318,9 @@ def unified_diff_text(old: str, new: str, context: int = 2) -> str:
 def compile_candidates(
     candidates: list[dict], memory_dirs: list[Path] | None = None
 ) -> list[dict]:
-    """candidate 각각에 대해 기존 memory 매칭 → Gemma 정제 → update 메타 부착.
+    """candidate 각각에 대해 기존 memory 매칭 → Luna 정제 → update 메타 부착.
 
-    Gemma 호출 실패하면 해당 candidate 는 원본 그대로 통과.
+    Luna 호출 실패하면 해당 candidate 는 원본 그대로 통과.
     """
     if not candidates:
         return []
