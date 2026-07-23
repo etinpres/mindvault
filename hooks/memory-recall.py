@@ -297,13 +297,12 @@ def _sanitize(text: str) -> str:
 
 
 def _format_output(results: list[dict]) -> str:
-    """NEXT-37 Phase 2 (Step 2) — Zep "MEMORY CONTEXT:" 라벨 + Chain-of-Note
-    self-report 강제 prompt.
+    """NEXT-37 Phase 2 (Step 2) — Zep "MEMORY CONTEXT:" 라벨 + silent
+    integration prompt.
 
-    배경 (3-agent 자료조사 수렴): 회수된 메모리를 LLM 답변에 강제 통합하는
-    유일한 검증된 메커니즘 = "답변에 활용 흔적을 explicit 출력하라"는
-    contract. Zep production 검증 포맷 + Chain-of-Note EM +7.9 효과 + Cursor
-    positive instruction 패턴 결합.
+    회수된 메모리는 답변 reasoning 에 반영하되, 내부 회수 과정 자체는 사용자
+    답변에 노출하지 않는다. 최신 사용자 진술 우선과 저장된 룰·제약 검사는
+    계속 강제한다.
 
     옛 format ("# 메모리 회수 (Layer 4 hybrid)") 은 self_eval.py 의
     RECALL_INJECTION_HEADERS 가 backward compat 으로 retroactive 분석 보존.
@@ -354,11 +353,11 @@ def _format_output(results: list[dict]) -> str:
             lines.append(f"  발췌: {snippet}")
     lines.append("")
     lines.append(
-        "답변 시작 전 한 줄로 \"회수 노트: <위 메모리가 본 질문과 어떻게 "
-        "관련되는가, 무관하면 '무관'>\" 명시 출력 의무. 회수 fact 와 답변이 "
-        "모순되면 즉시 표기. 옵션·권장·다음 단계 제시 시 위 회수 메모리에 "
-        "명시된 룰·제약과 충돌하는 항목은 제거하거나 \"회수 메모리 <이름> 위반 "
-        "가능성\"으로 표기."
+        "위 메모리는 답변 reasoning 에 내부적으로만 통합하고, 메모리 회수 사실·"
+        "점수·출처를 사용자 답변에 별도로 표시하지 말 것. 회수 fact 와 사용자의 "
+        "최신 직접 진술이 모순되면 최신 진술을 우선한다. 옵션·권장·다음 단계 "
+        "제시 시 위 회수 메모리에 명시된 룰·제약과 충돌하는 항목은 제거한다. "
+        "사용자 판단에 꼭 필요한 실제 충돌만 메모리 용어 없이 설명할 것."
     )
     lines.append("</system-reminder>")
     return "\n".join(lines) + "\n"

@@ -30,11 +30,11 @@ COMPACT_TOP_K = 3
 # Layer 4 _format_output 과 byte-동일하게 유지할 라벨/계약 (parity 테스트가 강제)
 DEFAULT_INTRO = "MEMORY CONTEXT (다음 fact 를 본 답변 reasoning 에 반드시 통합):"
 CONTRACT = (
-    "답변 시작 전 한 줄로 \"회수 노트: <위 메모리가 본 질문과 어떻게 "
-    "관련되는가, 무관하면 '무관'>\" 명시 출력 의무. 회수 fact 와 답변이 "
-    "모순되면 즉시 표기. 옵션·권장·다음 단계 제시 시 위 회수 메모리에 "
-    "명시된 룰·제약과 충돌하는 항목은 제거하거나 \"회수 메모리 <이름> 위반 "
-    "가능성\"으로 표기."
+    "위 메모리는 답변 reasoning 에 내부적으로만 통합하고, 메모리 회수 사실·"
+    "점수·출처를 사용자 답변에 별도로 표시하지 말 것. 회수 fact 와 사용자의 "
+    "최신 직접 진술이 모순되면 최신 진술을 우선한다. 옵션·권장·다음 단계 "
+    "제시 시 위 회수 메모리에 명시된 룰·제약과 충돌하는 항목은 제거한다. "
+    "사용자 판단에 꼭 필요한 실제 충돌만 메모리 용어 없이 설명할 것."
 )
 
 # v3.2.6 H1: memory 본문에 '</system-reminder>' literal 이 들어가면 hook 출력이
@@ -65,7 +65,7 @@ def format_memory_context(
 ) -> str:
     """``recall_memory`` 결과를 회수 컨텍스트 텍스트로 포맷.
 
-    항목 구조(name/score/source/desc/발췌) + Chain-of-Note 계약은 Layer 4
+    항목 구조(name/score/source/desc/발췌) + silent integration 계약은 Layer 4
     ``_format_output`` 과 동일. 기본 intro + wrap=True 면 그 출력과 byte-동일.
     compact 경로는 다른 intro 를 넘겨 SessionStart additionalContext 에 싣는다.
 

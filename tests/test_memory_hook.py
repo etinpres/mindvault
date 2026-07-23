@@ -198,7 +198,9 @@ class TestHookNormalFlow(unittest.TestCase):
             )
         self.assertIn("<system-reminder>", out)
         self.assertIn("MEMORY CONTEXT (", out)
-        self.assertIn("회수 노트:", out)
+        self.assertIn("답변 reasoning 에 내부적으로만 통합", out)
+        self.assertIn("사용자 답변에 별도로 표시하지 말 것", out)
+        self.assertNotIn("회수 노트:", out)
         self.assertIn("</system-reminder>", out)
 
 

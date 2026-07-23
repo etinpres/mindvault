@@ -170,9 +170,9 @@ def test_formatter_intro_sanitized():
     assert "X </system-reminder> Y" not in out         # 원본 literal 은 무력화됨
 
 
-def test_self_check_clause_present_and_parity():
-    """②효과적 회수 — self-check 계약(옵션·권장·다음 단계 직전 cross-reference)이
-    양 포맷터 출력에 존재하고, 기존 "회수 노트:" 계약과 byte-parity 모두 유지.
+def test_silent_integration_clause_present_and_parity():
+    """②효과적 회수 — 내부 통합 계약과 사용자 비노출 규칙이
+    양 포맷터 출력에 존재하고 byte-parity 를 유지.
     D3(설계 결정3) 확정 문구가 양 포맷터에 존재하고 D7(설계 규칙7) byte-parity 를 만족."""
     import recall_core
     mr = _load_memrecall()
@@ -180,16 +180,15 @@ def test_self_check_clause_present_and_parity():
                "snippet": "", "score": 0.6}]
     out_core = recall_core.format_memory_context(sample, wrap_system_reminder=True)
     out_mr = mr._format_output(sample)
-    # self-check 조항 핵심 토큰 (D3(설계 결정3) 확정 문구 — audit R2E-1 후 content+이름 기반)
+    # 내부 통합 + 사용자 비노출 + 최신 직접 진술 우선
+    assert "답변 reasoning 에 내부적으로만 통합" in out_core
+    assert "사용자 답변에 별도로 표시하지 말 것" in out_core
+    assert "최신 직접 진술이 모순되면 최신 진술을 우선" in out_core
     assert "옵션·권장·다음 단계" in out_core
-    assert "위반 가능성" in out_core
-    # content 기반 scoping(회수 출력에 가시) + 구체 placeholder <이름> (R2E-1: 비가시 type 의존 제거)
     assert "위 회수 메모리에 명시된 룰·제약" in out_core
-    assert "회수 메모리 <이름> 위반 가능성" in out_core
-    # 기존 NEXT-37 계약 불변 (회귀 흉터 보호)
-    assert "회수 노트:" in out_core
-    assert "모순되면 즉시 표기" in out_core
-    assert "위반 가능성" in out_mr   # 명시 단언 — 동등성에만 의존 안 함 (양 포맷터 둘 다 확인)
+    assert "메모리 용어 없이 설명" in out_mr
+    assert "회수 노트:" not in out_core
+    assert "회수 노트:" not in out_mr
     # D7(설계 규칙7) byte-parity (한쪽만 바뀌면 실패)
     assert out_core == out_mr
 
@@ -210,7 +209,7 @@ def test_new_contract_preserves_self_eval_ingestion():
     out = recall_core.format_memory_context(sample, wrap_system_reminder=True)
     ids = extract_recalled_ids_from_hook_injection(out)
     assert ids == ["feedback-recalled-memory-weight"]   # 정확히 1건
-    # 새 계약 footer('회수 메모리 <이름> 위반 가능성' 등)가 RECALLED_NAME_RE 추출 noise 안 됨
+    # 새 계약 footer 가 RECALLED_NAME_RE 추출 noise 를 만들지 않음
     assert len(ids) == 1
 
 
@@ -243,9 +242,10 @@ def test_self_check_clause_propagates_to_compact_intro():
     out = recall_core.format_memory_context(
         sample, intro=session_memory.COMPACT_INTRO, wrap_system_reminder=True
     )
-    # self-check 조항이 compact 경로에도 전파 (D7 주장 검증)
+    # silent integration 조항이 compact 경로에도 전파 (D7 주장 검증)
     assert "옵션·권장·다음 단계" in out
-    assert "회수 메모리 <이름> 위반 가능성" in out
+    assert "사용자 답변에 별도로 표시하지 말 것" in out
+    assert "회수 노트:" not in out
     # default 가 아니라 실제 compact intro 가 쓰였음을 보증 (구별 토큰)
     assert "압축 직후 재주입" in out
 
