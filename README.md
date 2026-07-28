@@ -41,8 +41,10 @@ MindVault는 그 망각의 빈 자리를 네 축으로 메웁니다:
 3. **자동 컴파일** — SessionEnd/Stop마다 로컬 Gemma가 새 대화 구간에서 영구로 남길 가치가 있는 결정/노하우/사실을 추출, 검토 후 영구 메모리에 진입
 4. **모순 감지 (v3.4+)** — 신규 메모리가 기존과 충돌 (metric 갱신·결정 반전·사실 정정) 시 Gemma 4-way 분류로 검출, 검토 후 신규가 옛 항목 deprecate / 본문 update / dismiss
 
-Gemma 생성형 작업과 Arctic-ko 임베딩은 모두 로컬에서 동작한다. Codex CLI가
-설치돼 있다는 이유만으로 Luna를 호출하거나 구독 한도를 사용하지 않는다.
+메모리 추출·검색 보조·컴파일·모순 감지는 로컬 Gemma를, 임베딩은 로컬
+Arctic-ko를 사용한다. L1 SessionStart 요약만 Claude Code의 Haiku를 호출하며,
+전송 전 세션 조각에서 알려진 자격증명 패턴을 제거한다. Codex CLI가 설치돼 있다는
+이유만으로 Luna를 호출하거나 구독 한도를 사용하지 않는다.
 
 ## 왜 이렇게 만들었나 (Karpathy LLM-as-Compiler)
 
@@ -72,7 +74,7 @@ Gemma 생성형 작업과 Arctic-ko 임베딩은 모두 로컬에서 동작한�
 
 | Layer | 책임 |
 |---|---|
-| **L1 — SessionStart 자동 주입** | 최근 5 세션을 Gemma로 요약해 새 세션에 자동 주입. 캐시 히트 ~50ms. **compaction 직후(`source=compact`)엔 요약 대신 현재 세션 관련 메모리만 경량 재주입 (v3.5+)** — 압축으로 사라진 회수 맥락 복원 |
+| **L1 — SessionStart 자동 주입** | 최근 5 세션을 Claude Code Haiku로 요약해 새 세션에 자동 주입. 캐시 히트 ~50ms. **compaction 직후(`source=compact`)엔 요약 대신 현재 세션 관련 메모리만 경량 재주입 (v3.5+)** — 압축으로 사라진 회수 맥락 복원 |
 | **L2 — `/recall` 자연어 검색** | JSONL FTS5 + Gemma 재순위 (sessions), Arctic-ko 임베딩 + FTS5 hybrid RRF (memory) |
 | **L3 — Memory Compiler** | SessionEnd/Stop → Gemma 정제 → `memory/_procedural/_staged/` → `/memory_review` 승인 후 영구 진입 |
 | **L4 — UserPromptSubmit hook** | 매 메시지 hybrid 검색 → 관련 메모리 system-reminder 주입. raw cosine 게이트 + query intent classifier가 잡담 차단 (false positive 0%) |
@@ -317,7 +319,7 @@ rm -rf ~/.cache/mlx-arctic-ko
 ## 알려진 한계
 
 1. **Apple Silicon Mac 전용** — Intel Mac / Linux / Windows 사용 불가. MLX (`mlx-lm`, `mlx-embeddings`) 가 Apple Silicon 만 지원하고 launchd 도 macOS 전용.
-2. **공식 생성형 LLM은 로컬 Gemma 4 E4B** — Codex나 Claude Code가 설치돼 있어도 자동으로 클라우드 모델을 사용하지 않는다.
+2. **공식 생성형 LLM은 로컬 Gemma 4 E4B** — 단, L1 SessionStart 요약은 Claude Code Haiku를 사용한다. Codex가 설치돼 있다는 이유만으로 Luna를 자동 호출하지 않는다.
 3. **임베딩은 Arctic-ko (`dragonkue/snowflake-arctic-embed-l-v2.0-ko`, MLX 4bit) 만 지원** — 다른 임베딩 모델 사용 불가.
 4. **Gemma 4 E4B는 reasoning 모델** — 내부 사고에 토큰 많이 소비, `GEMMA_MAX_TOKENS` 크게 잡아야 함
 5. **한국어 특화 (Korean-first)** — 임베딩 모델(Arctic-ko 한국어 파인튜닝)·cosine 게이트 캘리브레이션·회수 단서어·query intent 규칙·Gemma 프롬프트·주입 지시문이 전부 한국어 기준. 영어 메모리도 저장·색인·검색은 되지만 회수 품질 튜닝은 한국어 대상이며 영어 환경에서는 미측정
@@ -361,12 +363,12 @@ for t in ('sessions','memories','memories_fts','memories_vec'):
 
 ## 라이선스
 
-MIT — 자세한 내용은 [LICENSE](LICENSE) 참조 (또는 별도 LICENSE 파일이 없는 경우 표준 MIT 적용).
+MIT — 자세한 내용은 [LICENSE](LICENSE) 참조.
 
 ## 기여 / 영감
 
 이 프로젝트는 [Andrej Karpathy의 LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 의 LLM-as-Compiler 패턴을 Claude Code 환경에서 실증한 결과입니다.
 
-이전에 같은 저자가 만든 [etinpres/mindvault](https://github.com/etinpres/mindvault) (deprecated) 는 이 패턴을 잘못 이해한 채 진행한 첫 시도였습니다. v3는 그 postmortem 교훈을 반영한 재시도입니다 — Gemma가 실제로 메모리를 정제·합성하는 구조로.
+이전에 같은 저자가 만든 [etinpres/mindvault-v1](https://github.com/etinpres/mindvault-v1) (deprecated) 은 이 패턴을 잘못 이해한 채 진행한 첫 시도였습니다. v3는 그 postmortem 교훈을 반영한 재시도입니다 — Gemma가 실제로 메모리를 정제·합성하는 구조로.
 
 이슈와 PR을 환영합니다. macOS 외 플랫폼 포팅에 관심 있다면 환영합니다.

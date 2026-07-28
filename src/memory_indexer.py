@@ -51,7 +51,7 @@ CTX_SYNOPSIS_CAP = 300  # synopsis/description 맥락 줄 cap(자)
 # synopsis tier 전용 로컬 Gemma(zero-cost — 클라우드 금지). index-time 이라 관대한 timeout.
 # enable_thinking=False 로 reasoning 생략(3~7배 빠름, 품질 동일 — CLAUDE.md gemma 규약).
 GEMMA_SYNOPSIS_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_SYNOPSIS_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_SYNOPSIS_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_SYNOPSIS_TIMEOUT = 8.0
 GEMMA_SYNOPSIS_MAX_TOKENS = 120
 # Sprint 9: BGE-M3 → Arctic-Embed-L v2.0 KO 교체. CLS pooling + L2 normalized.

@@ -32,7 +32,7 @@ DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expand
 DB_PATH = DATA_DIR / "index.db"
 DEBUG_LOG = DATA_DIR / "debug.log"
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 45
 
 RRF_K = 60

@@ -39,7 +39,7 @@ INDEX_PATH = DATA_DIR / "alias_index.json"
 DEBUG_LOG = DATA_DIR / "debug.log"
 
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 30  # SessionEnd batch context — 여유
 
 # NEXT-33: claude CLI 호출 시 schema 검증. structured_output 필드로 응답.

@@ -43,7 +43,7 @@ from memory_indexer import (  # noqa: E402
 DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expanduser()
 DEBUG_LOG = DATA_DIR / "debug.log"
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 45
 COMPILE_BODY_LIMIT = 500  # update 결과 본문 최대 글자 수 (soft hint to Gemma)
 COMPILE_BODY_HARD_LIMIT = 1200  # 실제 trim 한계

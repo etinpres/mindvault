@@ -18,7 +18,7 @@ from pathlib import Path
 DATA_DIR = Path(os.environ.get("MV3_DATA_DIR", "~/.claude/mindvault-v3")).expanduser()
 DEBUG_LOG = DATA_DIR / "debug.log"
 GEMMA_URL = "http://localhost:8080/v1/chat/completions"
-GEMMA_MODEL = "mlx-community/gemma-4-12B-it-4bit"
+GEMMA_MODEL = "mlx-community/gemma-4-e4b-it-4bit"
 GEMMA_TIMEOUT = 45
 MAX_BODY_CHARS = 200
 MAX_TITLE_CHARS = 50
